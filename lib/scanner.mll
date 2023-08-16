@@ -19,7 +19,7 @@
             ("bool", BOOL);
         ]
 
-    let unescape ch = match ch with
+    let unescape ch lexbuf = match ch with
         | '\''  ->  '\''
         | 'b'   ->  '\b'
         | 'f'   ->  char_of_int 0x0C
@@ -27,7 +27,7 @@
         | '\\'  ->  '\\'
         | 'r'   ->  '\r'
         | 'n'   ->  '\n'
-        | _     ->  raise Lexing_error (Lexing.lexeme_start_p lexbuf) "Invalid escape character"
+        | _     ->  raise (Lexing_error ((Location.to_lexeme_position lexbuf), "Invalid escape character"))
 
 }
 
@@ -59,7 +59,7 @@ rule next_token = parse
     {
         CHARACTER (
             match chara.[1] with
-                | '\\'  -> unescape (chara.[2])
+                | '\\'  -> unescape (chara.[2]) lexbuf
                 | c     -> c
         )
     }
