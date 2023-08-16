@@ -1,4 +1,0 @@
-(executable
- (public_name microcc)
- (name microcc)
- (libraries microc llvm llvm.bitwriter))
