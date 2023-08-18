@@ -87,11 +87,11 @@ fundecl:
   }}
 
 stmtordec:
-  | t = typ id = IDENTIFIER       {annotate_node(Ast.Dec(t, id)) $loc}
-  | s = stmt                      {annotate_node(Ast.Stmt(s)) $loc}
+  | t = typ id = IDENTIFIER SEMICOLON       {annotate_node(Ast.Dec(t, id)) $loc}
+  | s = stmt                                {annotate_node(Ast.Stmt(s)) $loc}
 
 block:
-  | RBRACE stmts = separated_list(SEMICOLON, stmtordec) LBRACE        {annotate_node(Ast.Block(stmts)) $loc}
+  | LBRACE stmts = list(stmtordec) RBRACE        {annotate_node(Ast.Block(stmts)) $loc}
 
 typ:
   | INT                           {Ast.TypI}
@@ -100,6 +100,7 @@ typ:
   | BOOL                          {Ast.TypB}
 
 stmt:
+  | block                                                           {$1}
   | RETURN ex = option(expr) SEMICOLON                              {annotate_node(Ast.Return(ex)) $loc}
   | ex = option(expr) SEMICOLON                                     {annotate_node(
                                                                       match ex with
@@ -107,8 +108,31 @@ stmt:
                                                                         | None    -> Ast.Block([])
                                                                       ) $loc}
   | WHILE LPAREN guard = expr RPAREN body = stmt                    {annotate_node(Ast.While(guard, body)) $loc}
-  //TODO: Add for
-  // | FOR LPAREN init = option(expr) SEMICOLON guard = option(expr) SEMICOLON incr = option(expr) RPAREN body = stmt        {Ast.} 
+  | FOR LPAREN init = option(expr) SEMICOLON guard = option(expr) SEMICOLON incr = option(expr) RPAREN body = stmt        {
+    annotate_node(
+      Ast.Block([
+        (match init with
+          | Some i  -> annotate_node (Ast.Stmt(annotate_node (Ast.Expr i) ($startpos(init), $endpos(init)))) ($startpos(init), $endpos(init))
+          | None    -> annotate_node (Ast.Stmt(annotate_node (Ast.Block([])) dummy_pos)) dummy_pos);
+
+        annotate_node (Ast.Stmt(
+        (annotate_node (Ast.While(
+          (match guard with
+            | Some g  -> g
+            | None    -> annotate_node (Ast.BLiteral(true)) dummy_pos),
+          
+          annotate_node (
+            Ast.Block([
+              annotate_node (Ast.Stmt(body)) ($startpos(body), $endpos(body));
+              
+              (match incr with
+                | Some i  -> annotate_node (Ast.Stmt(annotate_node (Ast.Expr i) ($startpos(incr), $endpos(incr)))) ($startpos(incr), $endpos(incr))
+                | None    -> annotate_node (Ast.Stmt(annotate_node (Ast.Block([])) dummy_pos)) dummy_pos);
+            ])) dummy_pos
+        )) $loc))) dummy_pos
+      ])
+    ) $loc
+  } 
   | IF LPAREN guard = expr RPAREN thenS = stmt ELSE elseS = stmt    {annotate_node(Ast.If(guard, thenS, elseS)) $loc}
   | IF LPAREN guard = expr RPAREN thenS = stmt        %prec THEN    {annotate_node(Ast.If(guard, thenS, annotate_node(Ast.Block([])) dummy_pos)) $loc}
 

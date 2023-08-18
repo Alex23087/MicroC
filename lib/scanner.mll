@@ -42,9 +42,12 @@ let identifier = (alpha | '_') (alphanumeric | '_')*
 let integer = digit+ | ("0x" hex+)
 let boolean = "true" | "false"
 
-let operator = ['&' '+' '-' '*' '/' '%' '=' '<' '>' '!'] | "=" | "!=" | "<=" | ">=" | "&&" | "||"
+let operator = ['&' '+' '-' '*' '/' '%' '=' '<' '>' '!'] | "==" | "!=" | "<=" | ">=" | "&&" | "||"
 
 let other = ['(' ')' '{' '}' '[' ']' '&' ';']
+
+let newline = ['\n' '\r'] | "\r\n"
+let whitespace = [' ' '\t']
 
 rule next_token = parse
 | "/*"      {block_comment lexbuf}
@@ -63,10 +66,43 @@ rule next_token = parse
                 | c     -> c
         )
     }
-| _         {EOF}
+
+| '('           {LPAREN}
+| ')'           {RPAREN}
+| '{'           {LBRACE}
+| '}'           {RBRACE}
+| '['           {LBRACK}
+| ']'           {RBRACK}
+| '&'           {AMP}
+| ','           {COMMA}
+| ';'           {SEMICOLON}
+
+| '+'           {PLUS}
+| '-'           {MINUS}
+| '*'           {STAR}
+| '/'           {SLASH}
+| '%'           {PERC}
+| '='           {GETS}
+| '<'           {LT}
+| '>'           {GT}
+| '!'           {BANG}
+| "=="          {EQ}
+| "!="          {NEQ}
+| "<="          {LEQ}
+| ">="          {GEQ}
+| "&&"          {LAND}
+| "||"          {LOR}
+
+| whitespace    {next_token lexbuf}
+| newline       {Lexing.new_line lexbuf; next_token lexbuf}
+
+| _ as c        {
+    raise (Lexing_error (Location.to_lexeme_position lexbuf, Printf.sprintf "Unrecognised character: \'%c\'" c))
+}
+| eof         {EOF}
 
 and single_line_comment = parse
-    | '\n'  {next_token lexbuf}               (* Go back to main scanner *)
+    | newline  {Lexing.new_line lexbuf; next_token lexbuf}               (* Go back to main scanner *)
     | _     {single_line_comment lexbuf}  (* Ignore comment *)
 
 and block_comment = parse
