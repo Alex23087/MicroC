@@ -12,7 +12,7 @@
 %token EOF
 %token IF
 %token RETURN
-%token ELSE
+%token THEN ELSE
 %token FOR
 %token WHILE
 %token INT
@@ -29,6 +29,8 @@
 %token LPAREN RPAREN RBRACK LBRACE RBRACE SEMICOLON COMMA
 
 /* Precedence and associativity specification */
+%nonassoc THEN
+%nonassoc ELSE
 %right    GETS              /* lowest precedence */
 %left     LOR
 %left     LAND
@@ -36,8 +38,8 @@
 %nonassoc GT LT GEQ LEQ
 %left     PLUS MINUS
 %left     STAR SLASH PERC
-%nonassoc BANG AMP
-%nonassoc LBRACK             /* highest precedence  */
+%nonassoc BANG //AMP
+//%nonassoc LBRACK             /* highest precedence  */
 
 /* Starting symbol */
 
@@ -62,7 +64,6 @@
 /* Grammar specification */
 
 program:
-  | EOF                            {Ast.Prog([])}
   | tds = list(topdecl) EOF        {Ast.Prog(tds)}
 
 topdecl:
@@ -109,7 +110,7 @@ stmt:
   //TODO: Add for
   // | FOR LPAREN init = option(expr) SEMICOLON guard = option(expr) SEMICOLON incr = option(expr) RPAREN body = stmt        {Ast.} 
   | IF LPAREN guard = expr RPAREN thenS = stmt ELSE elseS = stmt    {annotate_node(Ast.If(guard, thenS, elseS)) $loc}
-  | IF LPAREN guard = expr RPAREN thenS = stmt                      {annotate_node(Ast.If(guard, thenS, annotate_node(Ast.Block([])) dummy_pos)) $loc}
+  | IF LPAREN guard = expr RPAREN thenS = stmt        %prec THEN    {annotate_node(Ast.If(guard, thenS, annotate_node(Ast.Block([])) dummy_pos)) $loc}
 
 expr:
   | lexpr {$1}
@@ -130,7 +131,7 @@ rexpr:
   | MINUS ex = expr                                                       {annotate_node(Ast.UnaryOp(Ast.Neg, ex)) $loc}
   | lhs = expr bo = binop rhs = expr                                      {annotate_node(Ast.BinaryOp(bo, lhs, rhs)) $loc}
 
-binop:
+%inline binop:
   | PLUS    {Ast.Add}
   | MINUS   {Ast.Sub}
   | STAR    {Ast.Mult}
