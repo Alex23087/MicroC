@@ -1,10 +1,10 @@
-{
-    "emeraldwalk.runonsave": {
-        "commands": [
-            {
-                "match": ".*",
-                "cmd": "dunstify \"`make build 2>&1`\""
-            }
-        ]
-    }
-}
+// {
+//     "emeraldwalk.runonsave": {
+//         "commands": [
+//             {
+//                 "match": ".*",
+//                 "cmd": "dunstify \"`make build 2>&1`\""
+//             }
+//         ]
+//     }
+// }
