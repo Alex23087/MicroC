@@ -6,6 +6,11 @@
      (* Auxiliary definitions *)   
      let dummy_pos = (Lexing.dummy_pos, Lexing.dummy_pos)
      let annotate_node node loc = {Ast.loc = Location.to_code_position loc; node = node}
+
+     type vardesc = 
+      | VDPlain   of string
+      | VDPointer of vardesc
+      | VDArray   of vardesc * int option
 %}
 
 /* Tokens declarations */
@@ -39,7 +44,7 @@
 %left     PLUS MINUS
 %left     STAR SLASH PERC
 %nonassoc BANG //AMP
-//%nonassoc LBRACK             /* highest precedence  */
+%nonassoc LBRACK             /* highest precedence  */
 
 /* Starting symbol */
 
@@ -48,13 +53,13 @@
 %type <Ast.topdecl> topdecl
 %type <Ast.typ * Ast.identifier> vardecl
 %type <Ast.fun_decl> fundecl
-%type <Ast.identifier> vardesc
+%type <vardesc> vardesc
 %type <Ast.stmt> block
 %type <Ast.stmtordec> stmtordec
 %type <Ast.stmt> stmt
 %type <Ast.typ> typ
 %type <Ast.expr> expr
-%type <Ast.expr> lexpr
+%type <Ast.access> lexpr
 %type <Ast.expr> rexpr
 %type <Ast.expr> aexpr
 %type <Ast.binop> binop
@@ -71,12 +76,22 @@ topdecl:
   | fd = fundecl                    {annotate_node(Ast.Fundecl(fd)) $loc}
 
 vardecl:
-  | t = typ vd = vardesc            {(t, vd)}
+  | t = typ vd = vardesc            {
+    let rec build_type_id_tuple_from_vardesc ty vard =
+      match vard with
+        | VDPlain id          -> (ty, id)
+        | VDPointer vd        -> build_type_id_tuple_from_vardesc (Ast.TypP ty) vd
+        | VDArray (vd, size)  -> build_type_id_tuple_from_vardesc (Ast.TypA (ty, size)) vd
+    in build_type_id_tuple_from_vardesc t vd
+  }
 
 vardesc:
-  | id = IDENTIFIER                 {id}
-  | LPAREN id = IDENTIFIER RPAREN   {id}
-  //TODO: Add remaining vardescs
+  | id = IDENTIFIER                           {VDPlain id}
+  | LPAREN vd = vardesc RPAREN                {vd}
+  | STAR vd = vardesc                         {VDPointer vd}
+  | vd = vardesc LBRACK RBRACK                {VDArray (vd, None)}
+  //TODO: maybe add constexprs?
+  | vd = vardesc LBRACK size = INTEGER RBRACK     {VDArray (vd, (Some size))}
 
 fundecl:
   | t = typ id = IDENTIFIER LPAREN params = separated_list(COMMA, vardecl) RPAREN b = block         {{
@@ -87,7 +102,7 @@ fundecl:
   }}
 
 stmtordec:
-  | t = typ id = IDENTIFIER SEMICOLON       {annotate_node(Ast.Dec(t, id)) $loc}
+  | vd = vardecl                            {annotate_node(Ast.Dec (fst vd, snd vd)) $loc}
   | s = stmt                                {annotate_node(Ast.Stmt(s)) $loc}
 
 block:
@@ -137,20 +152,20 @@ stmt:
   | IF LPAREN guard = expr RPAREN thenS = stmt        %prec THEN    {annotate_node(Ast.If(guard, thenS, annotate_node(Ast.Block([])) dummy_pos)) $loc}
 
 expr:
-  | lexpr {$1}
+  | lexpr {annotate_node(Ast.Access($1)) $loc}
   | rexpr {$1}
 
 lexpr:
-  | id = IDENTIFIER             {annotate_node(Ast.Access(annotate_node(Ast.AccVar(id)) $loc)) $loc}
-  | LPAREN ex = lexpr RPAREN    {ex}
-  //TODO: Add remaining lexprs
+  | id = IDENTIFIER                         {annotate_node(Ast.AccVar(id)) $loc}
+  | LPAREN ex = lexpr RPAREN                {ex}
+  | STAR ex = lexpr                         {annotate_node(Ast.AccDeref(annotate_node (Ast.Access ex) $loc)) $loc}
+  | STAR ex = aexpr                         {annotate_node(Ast.AccDeref(ex)) $loc}
+  | ex = lexpr LBRACK ind = expr RBRACK     {annotate_node(Ast.AccIndex(ex, ind)) $loc}
 
 rexpr:
   | aexpr                                                                 {$1}
   | id = IDENTIFIER LPAREN params = separated_list(COMMA, expr) RPAREN    {annotate_node(Ast.Call(id, params)) $loc}
-  | lex = lexpr GETS ex = expr                                            {match lex.Ast.node with
-                                                                              | Ast.Access access -> annotate_node(Ast.Assign(access, ex)) $loc
-                                                                              | _ -> failwith "OIOI"}
+  | lex = lexpr GETS ex = expr                                            {annotate_node(Ast.Assign(lex, ex)) $loc}
   | BANG ex = expr                                                        {annotate_node(Ast.UnaryOp(Ast.Not, ex)) $loc}
   | MINUS ex = expr                                                       {annotate_node(Ast.UnaryOp(Ast.Neg, ex)) $loc}
   | lhs = expr bo = binop rhs = expr                                      {annotate_node(Ast.BinaryOp(bo, lhs, rhs)) $loc}

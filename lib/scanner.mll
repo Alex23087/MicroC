@@ -106,5 +106,6 @@ and single_line_comment = parse
     | _     {single_line_comment lexbuf}  (* Ignore comment *)
 
 and block_comment = parse
-    | "*/"  {next_token lexbuf}               (* Go back to main scanner *)
-    | _     {block_comment lexbuf}
+    | "*/"      {next_token lexbuf}               (* Go back to main scanner *)
+    | newline   {Lexing.new_line lexbuf; block_comment lexbuf}
+    | _         {block_comment lexbuf}
