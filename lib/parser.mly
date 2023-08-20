@@ -43,7 +43,7 @@
 %nonassoc GT LT GEQ LEQ
 %left     PLUS MINUS
 %left     STAR SLASH PERC
-%nonassoc BANG //AMP
+%nonassoc BANG AMP
 %nonassoc LBRACK             /* highest precedence  */
 
 /* Starting symbol */
@@ -192,5 +192,4 @@ aexpr:
   // TODO: NULL?
   // | NULL                          {Ast.}
   | LPAREN ex = rexpr RPAREN      {ex}
-  //TODO: Deref
-  // | AMP ex = lexpr                {Ast.}
+  | AMP ex = lexpr                {annotate_node (Ast.Addr(ex)) $loc}
