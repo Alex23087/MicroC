@@ -1,8 +1,13 @@
 exception DuplicateEntry of Ast.identifier
-type 'a t 
-val empty_table : 'a t 
-val begin_block : 'a t -> 'a t 
-val end_block : 'a t -> 'a t
-val add_entry : Ast.identifier -> 'a -> 'a t -> 'a t 
-val lookup : Ast.identifier -> 'a t -> 'a
-val of_alist : (Ast.identifier * 'a) list -> 'a t 
+exception SymbolNotFound of Ast.identifier
+
+type 'a symbol_record
+type 'a symbol_block
+type 'a symbol_table
+
+val empty_table : 'a symbol_table
+val begin_block : 'a symbol_table -> 'a symbol_table 
+val end_block : 'a symbol_table -> 'a symbol_table
+val add_entry : Ast.identifier -> 'a -> 'a symbol_table -> 'a symbol_table 
+val lookup : Ast.identifier -> 'a symbol_table -> 'a
+val of_alist : (Ast.identifier * 'a) list -> 'a symbol_table 

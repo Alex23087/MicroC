@@ -90,7 +90,6 @@ vardesc:
   | LPAREN vd = vardesc RPAREN                {vd}
   | STAR vd = vardesc                         {VDPointer vd}
   | vd = vardesc LBRACK RBRACK                {VDArray (vd, None)}
-  //TODO: maybe add constexprs?
   | vd = vardesc LBRACK size = INTEGER RBRACK     {VDArray (vd, (Some size))}
 
 fundecl:
