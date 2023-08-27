@@ -43,7 +43,7 @@ let process_source filename =
     lexbuf |>
     Parsing.parse Scanner.next_token |>
     Semantic_analysis.type_check |>
-    Ast.show_program |>
+    (fun a -> let _ = Ast.show_program a in "") |>
     Printf.printf "Semantic analysis succeded!\n\n%s\n"  
   with 
   | Scanner.Lexing_error (pos, msg)

@@ -1,0 +1,6 @@
+% TODO: Report
+
+\texttt{symbol_table.ml} changed \texttt{val empty_table : 'a symbol_table} to \texttt{val empty_table : unit -> 'a symbol_table} because of \url{https://caml.inria.fr/pub/papers/garrigue-value_restriction-fiwflp04.pdf}
+\texttt{symbol_table.ml} added \texttt{val lookup_opt}. Left the original function so that the interface is ``backwards-compatible''
+added \texttt{append_block}
+lookup_local_block
