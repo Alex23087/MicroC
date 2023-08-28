@@ -19,9 +19,6 @@ let rec typ_to_microc_type (typ: Ast.typ) = match typ with
   | Ast.TypV  -> TVoid
   | Ast.TypP typp  -> TPointer (typ_to_microc_type typp)
   | Ast.TypA (typa, size) -> TArray ((typ_to_microc_type typa), size)
-
-let topdecl_is_fundecl td = match td with Ast.Fundecl _ -> true | Ast.Vardec _ -> false
-let unwrap_topdecl_to_fundecl td = match td with Ast.Fundecl fd -> fd | _ -> failwith "Trying to unwrap vardecl as fundecl"
   
 let add_vardec_to_scope sym_table (identifier, typ) loc  =
   if Symbol_table.lookup_local_block sym_table identifier = None
@@ -44,30 +41,60 @@ let formal_to_record frm = let (typ, id) = frm in (id, typ_to_microc_type typ)
 
 let rec type_compatible lht rht =
   match (lht, rht) with
-    | (TArray(lt, ls), TArray(rt, rs)) -> (type_compatible lt rt) && (ls = rs || ls = None)
+    | (TArray(lt, ls), TArray(rt, rs)) -> (type_compatible lt rt) && (ls = rs || ls = None) (* An array declared with no defined size can be assigned (in function parameters) another one with a defined size *)
     | (TPointer lt, TPointer rt) -> type_compatible lt rt
     | _ -> lht = rht
 
 let rec type_check_fundecl sym_table fd = 
   let {
-    (* Ast.typ; *)
+    Ast.typ;
     (* Ast.fname; *)
     Ast.formals;
     Ast.body;
     _
   } = fd in 
+  let funret = (Some (typ_to_microc_type typ)) in
   let parameter_block = Symbol_table.append_block sym_table (formals |> List.map formal_to_record |> Symbol_table.of_alist |> Stack.pop) in
-  (* Format.print_string "Function "; Format.print_string fname; Format.print_string ":\n"; Format.print_break 0 0;
-  Symbol_table.print_entries parameter_block; *)
-  type_check_stmt sym_table body;
+  type_check_stmt sym_table ~funret body;
+  (* Check the presence of a return statement if the function is non-void. Typing is checked by type_check_stmt *)
+  if funret <> Some TVoid && not (check_return_presence body) then
+    except sym_table (Semantic_error ((@@)body, "No return in non-void function"));
   Symbol_table.end_block parameter_block >. ()
 
-and type_check_stmt sym_table stmt = let {Ast.node; _} = stmt in match node with
-  | Ast.If _       -> ()
-  | Ast.While _    -> ()
+and check_return_presence body =
+  match (@!) body with
+   (* If contains return if both branches contain return *)
+   | Ast.If (_, thenexpr, elseexpr) -> (
+    check_return_presence thenexpr &&
+    check_return_presence elseexpr
+   )
+   (* While contains return if its body contains return (no check for whether it is reached) *)
+   | Ast.While (_, body) -> check_return_presence body
+   | Ast.Return _ -> true
+   (* Block contains return if any of its statements contains return *)
+   | Ast.Block stmts -> 
+    stmts |>
+    List.filter_map (
+      (@!) >>
+      (fun s -> match s with Ast.Stmt s -> Some s | _ -> None)
+    ) |>
+    List.exists (check_return_presence)
+   | _ -> false
+
+and type_check_stmt sym_table ?(funret = None) stmt = let {Ast.node; Ast.loc} = stmt in match node with
+  | Ast.If (guard, thenstmt, elsestmt)       -> type_check_if sym_table ~funret (guard, thenstmt, elsestmt)
+  | Ast.While (guard, body)    -> type_check_while sym_table ~funret (guard, body)
   | Ast.Expr expr  -> type_check_expr sym_table expr >. ()
-  | Ast.Return _   -> ()
-  | Ast.Block stmts    -> type_check_block sym_table stmts
+  | Ast.Return expr   -> (
+    match funret with
+      | None -> except sym_table (Semantic_error (loc, "Returning from non-function"))
+      | Some funret-> (
+        let rettype = Option.fold ~none:TVoid ~some:(type_check_expr sym_table) expr in
+        if funret <> rettype
+          then except sym_table (Semantic_error (loc, Printf.sprintf "Returning value of type %s from a function that requires a value of type %s" (Symbol_table.show_microc_type rettype) (Symbol_table.show_microc_type funret)))
+      )
+  )
+  | Ast.Block stmts    -> type_check_block sym_table ~funret stmts
 
 and type_check_expr sym_table expr = (* Could check for constexprs and fix them at compile time *)
 match (@!) expr with
@@ -146,23 +173,41 @@ match node with
       | _ -> except sym_table (Semantic_error (loc, "Subscripting non-array variable")) (* TODO: must modify here to implement array-pointer duality *)
   )
 
-and type_check_block sym_table block =
+and type_check_block sym_table ?(funret = None) block =
   match block with
     | x::xs -> (
       (match (@!)x with
-        | Ast.Stmt stmt -> type_check_stmt sym_table stmt
+        | Ast.Stmt stmt -> type_check_stmt sym_table ~funret stmt
         | Ast.Dec (typ, identifier) -> add_vardec_to_scope sym_table (identifier, typ) ((@@)x) >. ());
-      type_check_block sym_table xs;
+      type_check_block sym_table ~funret xs;
     )
     | _ -> ()
+
+and type_check_if sym_table ?(funret = None) (guard, thenstmt, elsestmt) =
+  let guardtype = type_check_expr sym_table guard in
+  if guardtype <> TBool
+    then except sym_table (Semantic_error ((@@) guard, Printf.sprintf "Expected guard to be of type %s, got type %s instead" (show_microc_type TBool) (show_microc_type guardtype)));
+  type_check_stmt sym_table ~funret thenstmt;
+  type_check_stmt sym_table ~funret elsestmt
+
+and type_check_while sym_table ?(funret = None) (guard, body) =
+  let guardtype = type_check_expr sym_table guard in
+  if guardtype <> TBool
+    then except sym_table (Semantic_error ((@@) guard, Printf.sprintf "Expected guard to be of type %s, got type %s instead" (show_microc_type TBool) (show_microc_type guardtype)));
+  type_check_stmt sym_table ~funret body
+
+
+let add_library_functions sym_table =
+  add_entry "print" (TFunc([TInt], TVoid)) sym_table >. ();
+  add_entry "getint" (TFunc([], TInt)) sym_table >. ()
 
 let type_check _p = match _p with
   | Ast.Prog topdecls ->
     let sym_table = begin_block (empty_table()) in
+    add_library_functions sym_table >.
     List.iter (fun td -> add_topdecl_to_scope td sym_table >. ()) topdecls;
-    (* Symbol_table.print_entries sym_table; *)
     topdecls
-    |> List.map (@!)
-    |> List.filter topdecl_is_fundecl
-    |> List.iter (unwrap_topdecl_to_fundecl >> (sym_table |> type_check_fundecl))
+    |> List.filter_map (
+      fun td -> match (@!) td with Ast.Fundecl f -> Some f | _ -> None)
+    |> List.iter (sym_table |> type_check_fundecl)
     >. _p
