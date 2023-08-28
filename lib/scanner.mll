@@ -52,6 +52,10 @@ let whitespace = [' ' '\t']
 rule next_token = parse
 | "/*"      {block_comment lexbuf}
 | "//"      {single_line_comment lexbuf}
+
+| "true"        {BOOLEAN (true)}
+| "false"       {BOOLEAN (false)}
+
 | identifier as ident
     { try
         Hashtbl.find keyword_table ident

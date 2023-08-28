@@ -1,8 +1,8 @@
 open Symbol_table
 exception Semantic_error of Location.code_pos * string
 
-let except sym_table exn =
-  Symbol_table.print_entries sym_table;
+let except _ exn =
+  (* Symbol_table.print_entries sym_table; *)
   raise exn
 
 let (>.) a b = let _ = a in b   (* `e >. ()` is equivalent to `ignore e` *)
@@ -48,16 +48,15 @@ let rec type_compatible lht rht =
 let rec type_check_fundecl sym_table fd = 
   let {
     Ast.typ;
-    (* Ast.fname; *)
+    Ast.fname;
     Ast.formals;
     Ast.body;
-    _
   } = fd in 
   let funret = (Some (typ_to_microc_type typ)) in
   let parameter_block = Symbol_table.append_block sym_table (formals |> List.map formal_to_record |> Symbol_table.of_alist |> Stack.pop) in
   type_check_stmt sym_table ~funret body;
-  (* Check the presence of a return statement if the function is non-void. Typing is checked by type_check_stmt *)
-  if funret <> Some TVoid && not (check_return_presence body) then
+  (* Check the presence of a return statement if the function is non-void and not main. Typing is checked by type_check_stmt *)
+  if fname <> "main" && funret <> Some TVoid && not (check_return_presence body) then
     except sym_table (Semantic_error ((@@)body, "No return in non-void function"));
   Symbol_table.end_block parameter_block >. ()
 
@@ -162,7 +161,11 @@ match node with
       | Some t -> t
       | None -> except sym_table (Semantic_error (loc, (Printf.sprintf "Trying to access undeclared variable \"%s\"" ident)))
   )
-  | Ast.AccDeref expr -> TPointer (type_check_expr sym_table expr)
+  | Ast.AccDeref expr -> (
+    match (type_check_expr sym_table expr) with
+      | TPointer p -> p
+      | _ -> except sym_table (Semantic_error ((@@) expr, "Trying to dereference a non-pointer value"))
+  )
   | Ast.AccIndex (acc, expr) -> (
     match (type_check_access sym_table acc) with
       | TArray (t, _) -> (
@@ -174,14 +177,18 @@ match node with
   )
 
 and type_check_block sym_table ?(funret = None) block =
-  match block with
+  let sym_table = begin_block sym_table in
+  let rec type_check_block_aux block = (
+  (match block with
     | x::xs -> (
       (match (@!)x with
         | Ast.Stmt stmt -> type_check_stmt sym_table ~funret stmt
         | Ast.Dec (typ, identifier) -> add_vardec_to_scope sym_table (identifier, typ) ((@@)x) >. ());
-      type_check_block sym_table ~funret xs;
+      type_check_block_aux xs
     )
-    | _ -> ()
+    | _ -> ());
+  ) in type_check_block_aux block;
+  end_block sym_table >. ()
 
 and type_check_if sym_table ?(funret = None) (guard, thenstmt, elsestmt) =
   let guardtype = type_check_expr sym_table guard in
