@@ -1,10 +1,15 @@
 open Symbol_table
 exception Semantic_error of Location.code_pos * string
 
-let (>.) a b = let _ = a in b
+let except sym_table exn =
+  Symbol_table.print_entries sym_table;
+  raise exn
+
+let (>.) a b = let _ = a in b   (* `e >. ()` is equivalent to `ignore e` *)
 let (@!) node = match node with {Ast.node; _} -> node
 let (@@) node = match node with {Ast.loc; _} -> loc
 let (>>) f g x = g(f(x))
+let (>>>) f g x y = g(f(x)(y))
 (* let (<<) f g x = f(g(x)) *)
 
 let rec typ_to_microc_type (typ: Ast.typ) = match typ with
@@ -18,6 +23,11 @@ let rec typ_to_microc_type (typ: Ast.typ) = match typ with
 let topdecl_is_fundecl td = match td with Ast.Fundecl _ -> true | Ast.Vardec _ -> false
 let unwrap_topdecl_to_fundecl td = match td with Ast.Fundecl fd -> fd | _ -> failwith "Trying to unwrap vardecl as fundecl"
   
+let add_vardec_to_scope sym_table (identifier, typ) loc  =
+  if Symbol_table.lookup_local_block sym_table identifier = None
+    then Symbol_table.add_entry identifier (typ_to_microc_type typ) sym_table
+    else except sym_table (Semantic_error (loc, "Variable declared twice"))
+
 let add_topdecl_to_scope (td: Ast.topdecl) sym_table =
   match ((@!) td) with
     | Ast.Fundecl {Ast.typ; Ast.fname; Ast.formals; _} ->
@@ -26,13 +36,17 @@ let add_topdecl_to_scope (td: Ast.topdecl) sym_table =
           formals |> List.map (fst >> typ_to_microc_type), 
           typ_to_microc_type typ)
         )
-      else raise (Semantic_error ((@@) td, "Function declared twice"))
-    | Ast.Vardec (typ, identifier) ->
-      if Symbol_table.lookup_local_block sym_table identifier = None then
-        Symbol_table.add_entry identifier (typ_to_microc_type typ) sym_table
-      else raise (Semantic_error ((@@) td, "Variable declared twice"))
+      else except sym_table (Semantic_error ((@@) td, "Function declared twice"))
+    | Ast.Vardec (typ, identifier) -> add_vardec_to_scope sym_table (identifier, typ) ((@@) td)
+      
 
 let formal_to_record frm = let (typ, id) = frm in (id, typ_to_microc_type typ)
+
+let rec type_compatible lht rht =
+  match (lht, rht) with
+    | (TArray(lt, ls), TArray(rt, rs)) -> (type_compatible lt rt) && (ls = rs || ls = None)
+    | (TPointer lt, TPointer rt) -> type_compatible lt rt
+    | _ -> lht = rht
 
 let rec type_check_fundecl sym_table fd = 
   let {
@@ -53,18 +67,18 @@ and type_check_stmt sym_table stmt = let {Ast.node; _} = stmt in match node with
   | Ast.While _    -> ()
   | Ast.Expr expr  -> type_check_expr sym_table expr >. ()
   | Ast.Return _   -> ()
-  | Ast.Block _    -> ()
+  | Ast.Block stmts    -> type_check_block sym_table stmts
 
 and type_check_expr sym_table expr = (* Could check for constexprs and fix them at compile time *)
 match (@!) expr with
   | Ast.Access acc -> type_check_access sym_table acc
   | Ast.Assign (acc, exp) -> (
     let atype = type_check_access sym_table acc in
-    match atype with TArray _ -> raise (Semantic_error ((@@) expr, "Cannot assign array")) | _ ->
+    match atype with TArray _ -> except sym_table (Semantic_error ((@@) expr, "Cannot assign array")) | _ ->
     let etype = type_check_expr sym_table exp in
     if atype = etype
       then etype
-      else raise (Semantic_error ((@@) expr, "Assigning value of a wrong type"))
+      else except sym_table (Semantic_error ((@@) expr, "Assigning value of a wrong type"))
   )
   | Ast.Addr acc    -> TPointer (type_check_access sym_table acc)
   | Ast.ILiteral _  -> TInt
@@ -75,7 +89,7 @@ match (@!) expr with
     match (uop, etype) with
     | (Ast.Neg, TInt) -> TInt
     | (Ast.Not, TBool) -> TBool
-    | _ -> raise (Semantic_error ((@@) expr, Printf.sprintf "Invalid operand for operator \"%s\"" (Ast.show_uop uop)))
+    | _ -> except sym_table (Semantic_error ((@@) expr, Printf.sprintf "Invalid operand for operator \"%s\"" (Ast.show_uop uop)))
   )
   | Ast.BinaryOp (binop, lhs, rhs)  -> (
     let lhstype = type_check_expr sym_table lhs in
@@ -95,7 +109,7 @@ match (@!) expr with
       | (Ast.And, TBool, TBool)       -> TBool
       | (Ast.Or, TBool, TBool)        -> TBool
       
-      | _ -> raise (Semantic_error ((@@) expr, Printf.sprintf "Invalid operands for operator \"%s\"" (Ast.show_binop binop)))
+      | _ -> except sym_table (Semantic_error ((@@) expr, Printf.sprintf "Invalid operands for operator \"%s\"" (Ast.show_binop binop)))
   )
   | Ast.Call (fname, actuals)       -> (
     let functype_opt = Symbol_table.lookup_opt fname sym_table in
@@ -103,14 +117,14 @@ match (@!) expr with
       | Some functype -> (
         match functype with
           | TFunc (formals, return) -> (try (
-              if List.exists2 (<>) formals (List.map (type_check_expr sym_table) actuals)
-                then raise (Semantic_error ((@@) expr, "Formal and actual parameters are not compatible"))
+              if List.exists2 (type_compatible >>> not) formals (List.map (type_check_expr sym_table) actuals)
+                then except sym_table (Semantic_error ((@@) expr, "Formal and actual parameters are not compatible"))
                 else return
             )
-            with Invalid_argument _ -> raise (Semantic_error ((@@) expr, "Formal and actual parameters are not compatible"))) (* Raised by exists2 if the lists are of different lengths *)
-          | _ -> raise (Semantic_error ((@@) expr, "Calling non-function variable"))
+            with Invalid_argument _ -> except sym_table (Semantic_error ((@@) expr, (Printf.sprintf "Formal and actual parameters are not compatible: expected %d parameters, got %d" (List.length formals) (List.length actuals))))) (* Raised by exists2 if the lists are of different lengths *)
+          | _ -> except sym_table (Semantic_error ((@@) expr, "Calling non-function variable"))
       )
-      | None -> raise (Semantic_error ((@@) expr, Printf.sprintf "Calling undefined function \"%s\"" fname))
+      | None -> except sym_table (Semantic_error ((@@) expr, Printf.sprintf "Calling undefined function \"%s\"" fname))
   )
 
 and type_check_access sym_table acc =
@@ -119,7 +133,7 @@ match node with
   | Ast.AccVar ident -> (
     match Symbol_table.lookup_opt ident sym_table with
       | Some t -> t
-      | None -> raise (Semantic_error (loc, (Printf.sprintf "Trying to access undeclared variable \"%s\"" ident)))
+      | None -> except sym_table (Semantic_error (loc, (Printf.sprintf "Trying to access undeclared variable \"%s\"" ident)))
   )
   | Ast.AccDeref expr -> TPointer (type_check_expr sym_table expr)
   | Ast.AccIndex (acc, expr) -> (
@@ -127,10 +141,20 @@ match node with
       | TArray (t, _) -> (
         match type_check_expr sym_table expr with
           | TInt -> t
-          | _ -> raise (Semantic_error ((@@) expr, "Subscripting with a non-integer expression"))
+          | _ -> except sym_table (Semantic_error ((@@) expr, "Subscripting with a non-integer expression"))
       ) (* TODO: modify here to check array bounds at compile time *)
-      | _ -> raise (Semantic_error (loc, "Subscripting non-array variable")) (* TODO: must modify here to implement array-pointer duality *)
+      | _ -> except sym_table (Semantic_error (loc, "Subscripting non-array variable")) (* TODO: must modify here to implement array-pointer duality *)
   )
+
+and type_check_block sym_table block =
+  match block with
+    | x::xs -> (
+      (match (@!)x with
+        | Ast.Stmt stmt -> type_check_stmt sym_table stmt
+        | Ast.Dec (typ, identifier) -> add_vardec_to_scope sym_table (identifier, typ) ((@@)x) >. ());
+      type_check_block sym_table xs;
+    )
+    | _ -> ()
 
 let type_check _p = match _p with
   | Ast.Prog topdecls ->
