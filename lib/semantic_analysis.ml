@@ -19,10 +19,37 @@ let rec typ_to_microc_type (typ: Ast.typ) = match typ with
   | Ast.TypV  -> TVoid
   | Ast.TypP typp  -> TPointer (typ_to_microc_type typp)
   | Ast.TypA (typa, size) -> TArray ((typ_to_microc_type typa), size)
-  
+
+(* Arrays with size < 1 should not be allowed *)
+let rec array_size_check sym_table typ loc =
+  match typ with
+    | TArray (t, size) -> (
+      if Option.value size ~default:2 < 1 (* Default value is 2 as arrays with no size declared should be valid *)
+        then except sym_table (Semantic_error (loc, "Declaring an array of size less than 1"))
+        else array_size_check sym_table t loc
+    )
+    | _ -> ()
+
+(* Multidimensional arrays should not be allowed *)
+let array_dimension_check sym_table typ loc =
+  let rec array_dimension_check_aux ty array_encountered =
+    match ty with
+      | TPointer t -> array_dimension_check_aux t false
+      | TArray (t, _) -> (
+        if array_encountered
+          then except sym_table (Semantic_error (loc, "Multidimensional arrays are not allowed"))
+          else array_dimension_check_aux t true
+      )
+      | _ -> ()
+  in array_dimension_check_aux typ false
+
 let add_vardec_to_scope sym_table (identifier, typ) loc  =
+  let microctyp = typ_to_microc_type typ in
+  array_size_check sym_table microctyp loc >. ();
+  array_dimension_check sym_table microctyp loc >. ();
+  if microctyp = TVoid then except sym_table (Semantic_error (loc, Printf.sprintf "Variables cannot be of type %s" (show_microc_type TVoid)));
   if Symbol_table.lookup_local_block sym_table identifier = None
-    then Symbol_table.add_entry identifier (typ_to_microc_type typ) sym_table
+    then Symbol_table.add_entry identifier microctyp sym_table
     else except sym_table (Semantic_error (loc, "Variable declared twice"))
 
 let add_topdecl_to_scope (td: Ast.topdecl) sym_table =
@@ -37,7 +64,7 @@ let add_topdecl_to_scope (td: Ast.topdecl) sym_table =
     | Ast.Vardec (typ, identifier) -> add_vardec_to_scope sym_table (identifier, typ) ((@@) td)
       
 
-let formal_to_record frm = let (typ, id) = frm in (id, typ_to_microc_type typ)
+(* let formal_to_record frm = let (typ, id) = frm in (id, typ_to_microc_type typ) *)
 
 let rec type_compatible lht rht =
   match (lht, rht) with
@@ -53,11 +80,17 @@ let rec type_check_fundecl sym_table fd =
     Ast.body;
   } = fd in 
   let funret = (Some (typ_to_microc_type typ)) in
-  let parameter_block = Symbol_table.append_block sym_table (formals |> List.map formal_to_record |> Symbol_table.of_alist |> Stack.pop) in
-  type_check_stmt sym_table ~funret body;
+
+  let parameter_block = begin_block sym_table in
+
+  formals
+  |> List.iter (fun (typ, id) -> add_vardec_to_scope parameter_block (id, typ) ((@@) body) >. ()) >. ();
+
+
+  type_check_stmt parameter_block ~funret ~isfun:true body;
   (* Check the presence of a return statement if the function is non-void and not main. Typing is checked by type_check_stmt *)
   if fname <> "main" && funret <> Some TVoid && not (check_return_presence body) then
-    except sym_table (Semantic_error ((@@)body, "No return in non-void function"));
+    except parameter_block (Semantic_error ((@@)body, "No return in non-void function"));
   Symbol_table.end_block parameter_block >. ()
 
 and check_return_presence body =
@@ -80,7 +113,7 @@ and check_return_presence body =
     List.exists (check_return_presence)
    | _ -> false
 
-and type_check_stmt sym_table ?(funret = None) stmt = let {Ast.node; Ast.loc} = stmt in match node with
+and type_check_stmt sym_table ?(funret = None) ?(isfun = false) stmt = let {Ast.node; Ast.loc} = stmt in match node with
   | Ast.If (guard, thenstmt, elsestmt)       -> type_check_if sym_table ~funret (guard, thenstmt, elsestmt)
   | Ast.While (guard, body)    -> type_check_while sym_table ~funret (guard, body)
   | Ast.Expr expr  -> type_check_expr sym_table expr >. ()
@@ -93,7 +126,7 @@ and type_check_stmt sym_table ?(funret = None) stmt = let {Ast.node; Ast.loc} = 
           then except sym_table (Semantic_error (loc, Printf.sprintf "Returning value of type %s from a function that requires a value of type %s" (Symbol_table.show_microc_type rettype) (Symbol_table.show_microc_type funret)))
       )
   )
-  | Ast.Block stmts    -> type_check_block sym_table ~funret stmts
+  | Ast.Block stmts    -> type_check_block sym_table ~funret ~isfun stmts
 
 and type_check_expr sym_table expr = (* Could check for constexprs and fix them at compile time *)
 match (@!) expr with
@@ -176,8 +209,8 @@ match node with
       | _ -> except sym_table (Semantic_error (loc, "Subscripting non-array variable")) (* TODO: must modify here to implement array-pointer duality *)
   )
 
-and type_check_block sym_table ?(funret = None) block =
-  let sym_table = begin_block sym_table in
+and type_check_block sym_table ?(funret = None) ?(isfun = false) block =
+  if not isfun then begin_block sym_table >. ();
   let rec type_check_block_aux block = (
   (match block with
     | x::xs -> (
@@ -188,7 +221,7 @@ and type_check_block sym_table ?(funret = None) block =
     )
     | _ -> ());
   ) in type_check_block_aux block;
-  end_block sym_table >. ()
+  if not isfun then end_block sym_table >. ()
 
 and type_check_if sym_table ?(funret = None) (guard, thenstmt, elsestmt) =
   let guardtype = type_check_expr sym_table guard in
@@ -208,13 +241,18 @@ let add_library_functions sym_table =
   add_entry "print" (TFunc([TInt], TVoid)) sym_table >. ();
   add_entry "getint" (TFunc([], TInt)) sym_table >. ()
 
-let type_check _p = match _p with
+let type_check _p = 
+  match _p with
   | Ast.Prog topdecls ->
     let sym_table = begin_block (empty_table()) in
     add_library_functions sym_table >.
     List.iter (fun td -> add_topdecl_to_scope td sym_table >. ()) topdecls;
+    
+    if (lookup_opt "main" sym_table |> Option.is_none) then except sym_table (Semantic_error (Location.dummy_code_pos, "No main function defined"));
+
     topdecls
     |> List.filter_map (
       fun td -> match (@!) td with Ast.Fundecl f -> Some f | _ -> None)
     |> List.iter (sym_table |> type_check_fundecl)
+    (* >. print_entries sym_table *)
     >. _p
