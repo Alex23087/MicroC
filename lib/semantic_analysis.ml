@@ -140,7 +140,13 @@ match (@!) expr with
       else except sym_table (Semantic_error ((@@) expr, "Assigning value of a wrong type"))
   )
   | Ast.Addr acc    -> TPointer (type_check_access sym_table acc)
-  | Ast.ILiteral _  -> TInt
+  | Ast.ILiteral i  -> (
+    if i > Int32.to_int Int32.max_int then
+      except sym_table (Semantic_error ((@@) expr, "Integer greater than INT_MAX")) else
+    if i < Int32.to_int Int32.min_int then
+      except sym_table (Semantic_error ((@@) expr, "Integer greater than INT_MIN")) else
+    TInt 
+  )
   | Ast.CLiteral _  -> TChar
   | Ast.BLiteral _  -> TBool
   | Ast.UnaryOp (uop, exp)         -> (
