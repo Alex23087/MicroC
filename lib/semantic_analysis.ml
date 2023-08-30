@@ -12,14 +12,6 @@ let (>>) f g x = g(f(x))
 let (>>>) f g x y = g(f(x)(y))
 (* let (<<) f g x = f(g(x)) *)
 
-let rec typ_to_microc_type (typ: Ast.typ) = match typ with
-  | Ast.TypI  -> TInt
-  | Ast.TypB  -> TBool
-  | Ast.TypC  -> TChar
-  | Ast.TypV  -> TVoid
-  | Ast.TypP typp  -> TPointer (typ_to_microc_type typp)
-  | Ast.TypA (typa, size) -> TArray ((typ_to_microc_type typa), size)
-
 (* Arrays with size < 1 should not be allowed *)
 let rec array_size_check sym_table typ loc =
   match typ with
@@ -43,11 +35,22 @@ let array_dimension_check sym_table typ loc =
       | _ -> ()
   in array_dimension_check_aux typ false
 
+let function_return_type_check sym_table typ loc =
+  match typ with
+    | TFunc (_, ret) -> (
+      match ret with
+        | TArray _ -> except sym_table (Semantic_error (loc, "Functions cannot return arrays"))
+        | TPointer _ -> except sym_table (Semantic_error (loc, "Functions cannot return pointers"))
+        | _ -> ()
+    )
+    | _ -> ()
+
 let add_vardec_to_scope sym_table (identifier, typ) loc  =
   let microctyp = typ_to_microc_type typ in
   array_size_check sym_table microctyp loc >. ();
   array_dimension_check sym_table microctyp loc >. ();
   if microctyp = TVoid then except sym_table (Semantic_error (loc, Printf.sprintf "Variables cannot be of type %s" (show_microc_type TVoid)));
+  function_return_type_check sym_table microctyp loc >. ();
   if Symbol_table.lookup_local_block sym_table identifier = None
     then Symbol_table.add_entry identifier microctyp sym_table
     else except sym_table (Semantic_error (loc, "Variable declared twice"))
@@ -149,6 +152,7 @@ match (@!) expr with
   )
   | Ast.CLiteral _  -> TChar
   | Ast.BLiteral _  -> TBool
+  | Ast.Nullptr -> TPointer TVoid (* The C standard defines a null pointer as (void* )0 *)
   | Ast.UnaryOp (uop, exp)         -> (
     let etype = type_check_expr sym_table exp in
     match (uop, etype) with
@@ -197,7 +201,11 @@ let {Ast.node; Ast.loc} = acc in
 match node with
   | Ast.AccVar ident -> (
     match Symbol_table.lookup_opt ident sym_table with
-      | Some t -> t
+      | Some t -> (
+        match t with
+          | TFunc _ -> except sym_table (Semantic_error (loc, "Cannot denote functions as variables"))
+          | _ -> t
+      )
       | None -> except sym_table (Semantic_error (loc, (Printf.sprintf "Trying to access undeclared variable \"%s\"" ident)))
   )
   | Ast.AccDeref expr -> (
@@ -254,7 +262,16 @@ let type_check _p =
     add_library_functions sym_table >.
     List.iter (fun td -> add_topdecl_to_scope td sym_table >. ()) topdecls;
     
-    if (lookup_opt "main" sym_table |> Option.is_none) then except sym_table (Semantic_error (Location.dummy_code_pos, "No main function defined"));
+    let maintype = lookup_opt "main" sym_table in(
+      match maintype with
+        | None -> except sym_table (Semantic_error (Location.dummy_code_pos, "No main function defined"))
+        | Some t -> (
+          match t with
+            | TFunc ([], TInt) -> ()
+            | TFunc ([], TVoid) -> ()
+            | _ -> except sym_table (Semantic_error (Location.dummy_code_pos, "Main function has to be either `void main()` or `int main()`"))            
+        )
+    );
 
     topdecls
     |> List.filter_map (

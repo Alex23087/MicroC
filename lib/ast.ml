@@ -41,6 +41,7 @@ and expr_node =
   | ILiteral of int (* Integer literal  *)
   | CLiteral of char (* Char literal    *)
   | BLiteral of bool (* Bool literal    *)
+  | Nullptr (* NULL pointer literal *)
   | UnaryOp of uop * expr (* Unary primitive operator  *)
   | BinaryOp of binop * expr * expr (* Binary primitive operator  *)
   | Call of identifier * expr list (* Function call f(...)    *)

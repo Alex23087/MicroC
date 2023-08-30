@@ -15,6 +15,8 @@ type microc_type =
   | TFunc of microc_type list * microc_type
   [@@deriving show]
 
+val typ_to_microc_type: Ast.typ -> microc_type 
+
 val empty_table : unit -> 'a symbol_table
 val begin_block : 'a symbol_table -> 'a symbol_table 
 val end_block : 'a symbol_table -> 'a symbol_table

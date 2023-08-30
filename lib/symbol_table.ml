@@ -17,6 +17,15 @@ type microc_type =
   | TFunc of microc_type list * microc_type
   [@@deriving show]
 
+let rec typ_to_microc_type (typ: Ast.typ) = match typ with
+  | Ast.TypI  -> TInt
+  | Ast.TypB  -> TBool
+  | Ast.TypC  -> TChar
+  | Ast.TypV  -> TVoid
+  | Ast.TypP typp  -> TPointer (typ_to_microc_type typp)
+  | Ast.TypA (typa, size) -> TArray ((typ_to_microc_type typa), size)
+
+
 let empty_table = Stack.create
 
 let begin_block (current_table: 'a symbol_table) = Stack.push (Hashtbl.create 1) current_table; current_table
