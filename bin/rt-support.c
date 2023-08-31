@@ -8,3 +8,7 @@ int getint(){
       return 0;
     return atoi(buffer);
 }
+
+void print(int n){
+  printf("%d\n", n);
+}

@@ -21,6 +21,10 @@ build: ## Build the project, including non installable libraries and executables
 start: all ## Run the produced executable
 	opam exec -- dune exec --root . bin/$(EXE).exe $(ARGS)
 	 
+.PHONY: clean-comp
+clean-comp: ## Clean microc compilation byproducts
+	rm a.bc output.bc output.o rt-support.bc
+
 .PHONY: clean
 clean: ## Clean build artifacts and other generated files
 	opam exec -- dune clean --root .
@@ -44,3 +48,16 @@ watch: ## Watch for the filesystem and rebuild on every change
 .PHONY: utop
 utop: ## Run a REPL and link with the project's libraries
 	opam exec -- dune utop --root . lib -- -implicit-bindings
+
+.PHONY: compile
+compile: start ## Compile executable and link runtime libraries
+	/usr/lib/llvm14/bin/clang -emit-llvm -c "bin/rt-support.c"
+	llvm-link rt-support.bc a.bc -o output.bc
+	llc -filetype=obj output.bc
+	/usr/lib/llvm14/bin/clang output.o -o a.out
+	make clean-comp
+
+.PHONY: run
+run: compile ## Compile, link and run program
+	./a.out
+	rm a.out

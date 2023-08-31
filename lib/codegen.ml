@@ -31,6 +31,17 @@ let add_global_var mcmodule sym_table (typ, id) =
     Llvm.define_global id (typ |> typ_to_llvmtype |> const_null) mcmodule)
   ) >. ()
 
+let add_external_function_to_module mcmodule sym_table (fname, typ, formals)=
+  sym_table |> (add_entry fname (
+    Llvm.declare_function fname (
+      Llvm.function_type (typ_to_llvmtype typ) (
+        formals |>
+        List.map (typ_to_llvmtype) |>
+        Array.of_list
+      )
+    ) mcmodule)
+  ) >. ()
+
 let add_function_to_module mcmodule sym_table fundecl =
   let {
     typ;
@@ -48,12 +59,10 @@ let add_function_to_module mcmodule sym_table fundecl =
     ) mcmodule)
   ) >. ()
 
-
 let add_topdecl_to_module mcmodule sym_table topdecl =
   match (@!) topdecl with
     | Fundecl fd -> add_function_to_module mcmodule sym_table fd
     | Vardec (typ, id) -> add_global_var mcmodule sym_table (typ, id)
-
 
 let rec build_function sym_table fd = let {fname; formals; body; typ} = fd in
   let fundef = lookup fname sym_table in
@@ -134,7 +143,21 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
       | Or -> failwith "Not Implemented")
       lhsval rhsval (get_unique_name()) builder
     )
-    | Call _ -> Llvm.const_null (Llvm.i32_type ctx);
+    | Call (funcname, params) -> (
+      let func = sym_table |> lookup funcname in
+      let param_array = (
+        params |>
+        List.mapi
+          (fun i -> build_expr sym_table builder 
+            ~nulltype:(i |> Llvm.param func |> Llvm.type_of))
+        |> Array.of_list) in
+      Llvm.build_call func param_array (
+        (* Functions with void return type should have an empty string as identifier for the return value *)
+        if func |> type_of |> element_type |> return_type |> classify_type = TypeKind.Void
+          then ""
+          else get_unique_name()
+      ) builder
+    )
 
 and build_local_decl sym_table builder (typ, id) =
   let vartyp = typ_to_llvmtype typ in
@@ -202,6 +225,10 @@ let to_llvm_module program =
     | Prog topdecls ->(
       let mcmodule = create_module ctx "program" in
       let sym_table = begin_block (empty_table ()) in
+
+      (* Declare external library functions *)
+      add_external_function_to_module mcmodule sym_table ("print", TypV, [TypI]);
+      add_external_function_to_module mcmodule sym_table ("getint", TypI, []);
 
       topdecls |> List.iter
       (add_topdecl_to_module mcmodule sym_table);
