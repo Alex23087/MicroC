@@ -55,55 +55,147 @@ let add_topdecl_to_module mcmodule sym_table topdecl =
     | Vardec (typ, id) -> add_global_var mcmodule sym_table (typ, id)
 
 
-let rec build_function mcmodule sym_table fd = let {fname; formals; body; _} = fd in
+let rec build_function sym_table fd = let {fname; formals; body; typ} = fd in
   let fundef = lookup fname sym_table in
   let builder = Llvm.builder_at_end ctx (Llvm.entry_block fundef) in
 
   sym_table |> begin_block >. ();
   formals |> List.iteri (
-    fun i (_, id) -> add_entry id (Llvm.param fundef i) sym_table >. ());
+    fun i (_, id) -> add_entry id (
+      (* Promote parameters to local variables *)
+      let param_i = Llvm.param fundef i in
+      let param_i_typ = Llvm.type_of param_i in
+      let param_i_loc = Llvm.build_alloca param_i_typ id builder in
+      Llvm.build_store param_i param_i_loc builder >.
+      param_i_loc
+    ) sym_table >. ());
 
-  build_stmt mcmodule sym_table builder body;
+  build_stmt sym_table builder body;
 
-and build_stmt mcmodule sym_table builder stmt =
+  (match builder |> insertion_block |> Llvm.block_terminator with
+    | Some _ -> ()
+    | None -> (
+      if typ = TypV
+        then Llvm.build_ret_void builder >. ()
+        else (typ |> typ_to_llvmtype |> Llvm.const_null |> Llvm.build_ret) builder >. ()
+    )
+  );
+
+  sym_table |> end_block >. ()
+
+and build_stmt sym_table builder stmt =
   match (@!) stmt with
     | If _ -> failwith "Not Implemented"
-    | While _ -> failwith "Not Implemented"
-    | Expr e -> build_expr mcmodule sym_table builder e (TypP TypV)>. ()
+    | While (guard, body) -> build_while sym_table builder (guard, body)
+    | Expr e -> build_expr sym_table builder e >. ()
     | Return _ -> failwith "Not Implemented"
-    | Block block -> build_block mcmodule sym_table builder block
+    | Block block -> build_block sym_table builder block
 
-and build_block mcmodule sym_table builder block =
+and build_block sym_table builder block =
   let sym_table = sym_table |> begin_block in
   block |> List.iter (fun sd -> (
     match (@!) sd with
       | Dec (typ, id) -> build_local_decl sym_table builder (typ, id)
-      | Stmt stmt -> build_stmt mcmodule sym_table builder stmt
+      | Stmt stmt -> build_stmt sym_table builder stmt
   ));
   sym_table |> end_block >. ()
 
-and build_expr mcmodule sym_table builder expr nulltype =
+and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr =
   match (@!) expr with
-    | Access _ -> failwith "Not Implemented"
-    | Assign _ -> failwith "Not Implemented"
+    | Access acc -> build_access sym_table builder ~load:true acc
+    | Assign (acc, expr) -> build_assign sym_table builder (acc, expr)
     | Addr _ -> failwith "Not Implemented"
     | ILiteral i -> Llvm.const_int (TypI |> typ_to_llvmtype) i
     | CLiteral c -> Llvm.const_int (TypC |> typ_to_llvmtype) (c |> int_of_char)
     | BLiteral b -> Llvm.const_int (TypB |> typ_to_llvmtype) (b |> Bool.to_int)
-    | Nullptr -> Llvm.const_null (nulltype |> typ_to_llvmtype)
+    | Nullptr -> Llvm.const_null nulltype
     | UnaryOp (uop, expr) -> (
-      let exprval = build_expr mcmodule sym_table builder expr nulltype in
+      let exprval = build_expr sym_table builder ~nulltype expr in
       match uop with
         | Not -> Llvm.build_neg exprval (get_unique_name()) builder
         | Neg -> Llvm.build_neg exprval (get_unique_name()) builder
     )
-    | BinaryOp _ -> failwith "Not Implemented"
-    | Call _ -> failwith "Not Implemented"
+    | BinaryOp (binop, lhs, rhs) -> (
+      let lhsval = build_expr sym_table builder ~nulltype lhs in
+      let rhsval = build_expr sym_table builder ~nulltype rhs in
+      (match binop with
+      | Add -> Llvm.build_nsw_add
+      | Sub -> Llvm.build_nsw_sub
+      | Mult  -> failwith "Not Implemented"
+      | Div -> failwith "Not Implemented"
+      | Mod -> failwith "Not Implemented"
+      | Equal -> failwith "Not Implemented"
+      | Neq -> failwith "Not Implemented"
+      | Less  -> Llvm.build_icmp Icmp.Slt
+      | Leq -> failwith "Not Implemented"
+      | Greater -> Llvm.build_icmp Icmp.Sgt
+      | Geq -> failwith "Not Implemented"
+      | And -> failwith "Not Implemented"
+      | Or -> failwith "Not Implemented")
+      lhsval rhsval (get_unique_name()) builder
+    )
+    | Call _ -> Llvm.const_null (Llvm.i32_type ctx);
 
 and build_local_decl sym_table builder (typ, id) =
   let vartyp = typ_to_llvmtype typ in
   let llvar = Llvm.build_alloca vartyp id builder in
   sym_table |> add_entry id llvar >. ()
+
+and build_assign sym_table builder (acc, expr) =
+  let lvalue = build_access sym_table builder ~load:false acc in
+  let rvalue = build_expr sym_table builder ~nulltype:(Llvm.type_of lvalue) expr in
+  Llvm.build_store rvalue lvalue builder
+
+and build_access sym_table builder ?(load = false) acc =
+  match (@!) acc with
+    | AccVar id -> (
+      let var = sym_table |> lookup id in
+      if load
+        then Llvm.build_load var (get_unique_name()) builder
+        else var
+    )
+    | AccDeref expr -> (
+      let addr = build_expr sym_table builder expr in
+      if load
+        then Llvm.build_load addr (get_unique_name()) builder
+        else addr
+    )
+    | AccIndex (arr, ind) -> (
+      let arr_addr = build_access sym_table builder ~load:false arr in
+      let ind_val = build_expr sym_table builder ~nulltype:(typ_to_llvmtype TypI) ind in
+      let addr = Llvm.build_in_bounds_gep arr_addr [|ind_val|] (get_unique_name()) builder in
+      if load
+        then Llvm.build_load addr (get_unique_name()) builder
+        else addr
+    )
+
+and build_while sym_table builder (guard, body) =
+  let current_block = builder |> insertion_block in
+  let current_function = current_block |> block_parent in
+
+  (* Define names for the blocks *)
+  let guard_block_name = get_unique_name() in
+  let body_block_name = get_unique_name() in
+  let merge_block_name = get_unique_name() in
+  
+  (* Create blocks *)
+  let guard_block = Llvm.append_block ctx guard_block_name current_function in
+  let body_block = Llvm.append_block ctx body_block_name current_function in
+  let merge_block = Llvm.append_block ctx merge_block_name current_function in
+
+  (* Generate guard block *)
+  Llvm.build_br guard_block builder >. ();
+  let guard_builder = Llvm.builder_at_end ctx guard_block in
+  let g = build_expr sym_table guard_builder guard in
+  Llvm.build_cond_br g body_block merge_block guard_builder >. ();
+
+  (* Generate body block *)
+  let body_builder = Llvm.builder_at_end ctx body_block in
+  build_stmt sym_table body_builder body >. ();
+  Llvm.build_br guard_block body_builder >. ();
+
+  (* Move builder at end of while *)
+  Llvm.position_at_end merge_block builder
 
 let to_llvm_module program =
   match program with
@@ -116,7 +208,7 @@ let to_llvm_module program =
 
       topdecls |>
       List.filter_map (fun td -> match (@!) td with | Fundecl fd -> Some fd | _ -> None) |>
-      List.iter (build_function mcmodule sym_table);
+      List.iter (build_function sym_table);
 
       mcmodule
     )
