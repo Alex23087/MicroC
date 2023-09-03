@@ -1,4 +1,0 @@
-test-ex11
-test-ex11count
-test-ex18
-test-func2

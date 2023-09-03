@@ -6,7 +6,7 @@ make build
 for fl in $(ls test/samples | grep .out | grep -Fvf testfails.txt | sed s/.out$//)
 
 # Run tests that fail
-#for fl in $(cat testfails.txt)
+# for fl in $(cat testfails.txt)
 do
     f=test/samples/$fl.out
     TESTFILE=$(echo $f | sed s/out$/mc/)

@@ -95,6 +95,8 @@ let rec build_function sym_table fd = let {fname; formals; body; typ} = fd in
   sym_table |> end_block >. ()
 
 and build_stmt sym_table builder stmt =
+  (* builder |> insertion_block |> block_parent |> global_parent |> string_of_llmodule |>Printf.printf "%s\n\n\n\n%!"; *)
+  
   if builder |> has_terminator then () else
   match (@!) stmt with
     | If (guard, thenstmt, elsestmt) -> build_if sym_table builder (guard, thenstmt, elsestmt)
@@ -173,7 +175,7 @@ and build_local_decl sym_table builder (typ, id) =
 and build_assign sym_table builder (acc, expr) =
   let lvalue = build_access sym_table builder ~load:false acc in
   let rvalue = build_expr sym_table builder ~nulltype:(Llvm.type_of lvalue) expr in
-  Llvm.build_store rvalue lvalue builder
+  Llvm.build_store rvalue lvalue builder >. rvalue
 
 and build_access sym_table builder ?(load = false) acc =
   let v = match (@!) acc with
@@ -183,7 +185,6 @@ and build_access sym_table builder ?(load = false) acc =
       let arr_addr = build_access sym_table builder ~load:false arr in
       let ind_val = build_expr sym_table builder ~nulltype:(typ_to_llvmtype TypI) ind in
       let addr = (
-        arr_addr |> string_of_llvalue |> Printf.printf "%s\n%!";
         match arr_addr |> type_of |> element_type |> classify_type with
           | Llvm.TypeKind.Array -> Llvm.build_in_bounds_gep arr_addr [|Llvm.const_int (Llvm.i32_type ctx) 0; ind_val|] (get_unique_name()) builder
           | Llvm.TypeKind.Pointer -> let data_addr = Llvm.build_load arr_addr (get_unique_name()) builder in

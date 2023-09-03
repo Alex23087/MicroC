@@ -101,7 +101,7 @@ fundecl:
   }}
 
 stmtordec:
-  | vd = vardecl                            {annotate_node(Ast.Dec (fst vd, snd vd)) $loc}
+  | vd = vardecl SEMICOLON                  {annotate_node(Ast.Dec (fst vd, snd vd)) $loc}
   | s = stmt                                {annotate_node(Ast.Stmt(s)) $loc}
 
 block:
