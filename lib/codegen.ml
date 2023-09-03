@@ -166,6 +166,21 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
           else get_unique_name()
       ) builder
     )
+    | Prepost (pp, op, acc) -> (
+      (* Get location of value to be changed, get value, increment/decrement it
+         then return either the old value or the new one depending on pre/post operation *)
+      let valloc = build_access sym_table builder ~load:false acc in
+      let oldval = Llvm.build_load valloc (get_unique_name()) builder in
+      let newval = (
+        match op with
+          | Incr -> (Llvm.build_add oldval (Llvm.const_int (Llvm.i32_type ctx) 1) (get_unique_name()) builder)
+          | Decr -> (Llvm.build_add oldval (Llvm.const_int (Llvm.i32_type ctx) 1) (get_unique_name()) builder)
+      ) in
+      Llvm.build_store newval valloc builder >.
+      match pp with
+        | Pre -> newval
+        | Post -> oldval
+    )
 
 and build_local_decl sym_table builder (typ, id) =
   let vartyp = typ_to_llvmtype typ in

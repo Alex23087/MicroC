@@ -14,6 +14,16 @@ type binop =
   | Or
 [@@deriving show]
 
+type prepost_op =
+  | Incr
+  | Decr
+[@@deriving show]
+
+and prepost = 
+  | Pre
+  | Post
+[@@deriving show]
+
 type uop = Neg | Not [@@deriving show]
 type identifier = string [@@deriving show]
 
@@ -45,6 +55,7 @@ and expr_node =
   | UnaryOp of uop * expr (* Unary primitive operator  *)
   | BinaryOp of binop * expr * expr (* Binary primitive operator  *)
   | Call of identifier * expr list (* Function call f(...)    *)
+  | Prepost of prepost * prepost_op * access
 [@@deriving show]
 
 and access = access_node annotated_node

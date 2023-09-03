@@ -96,6 +96,13 @@ rule next_token = parse
 | ">="          {GEQ}
 | "&&"          {LAND}
 | "||"          {LOR}
+| "++"          {INC}
+| "--"          {DEC}
+| "+="          {PLEQ}
+| "-="          {MINEQ}
+| "*="          {TIMEQ}
+| "/="          {DIVEQ}
+| "%="          {MODEQ}
 
 | whitespace    {next_token lexbuf}
 | newline       {Lexing.new_line lexbuf; next_token lexbuf}

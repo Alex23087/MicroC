@@ -119,7 +119,7 @@ and check_return_presence body =
 and type_check_stmt sym_table ?(funret = None) ?(isfun = false) stmt = let {Ast.node; Ast.loc} = stmt in match node with
   | Ast.If (guard, thenstmt, elsestmt)       -> type_check_if sym_table ~funret (guard, thenstmt, elsestmt)
   | Ast.While (guard, body)    -> type_check_while sym_table ~funret (guard, body)
-  | Ast.Expr expr  -> type_check_expr sym_table expr >. ()
+  | Ast.Expr expr  -> check_double_assign sym_table expr ((@@) expr) >. type_check_expr sym_table expr >. ()
   | Ast.Return expr   -> (
     match funret with
       | None -> except sym_table (Semantic_error (loc, "Returning from non-function"))
@@ -195,6 +195,11 @@ match (@!) expr with
       )
       | None -> except sym_table (Semantic_error ((@@) expr, Printf.sprintf "Calling undefined function \"%s\"" fname))
   )
+  | Ast.Prepost (_, _, acc) -> (
+    if type_check_access sym_table acc = TInt
+      then TInt
+      else except sym_table (Semantic_error ((@@) expr, "Trying to increment or decrement non-int value"))
+  )
 
 and type_check_access sym_table acc =
 let {Ast.node; Ast.loc} = acc in
@@ -250,6 +255,39 @@ and type_check_while sym_table ?(funret = None) (guard, body) =
     then except sym_table (Semantic_error ((@@) guard, Printf.sprintf "Expected guard to be of type %s, got type %s instead" (show_microc_type TBool) (show_microc_type guardtype)));
   type_check_stmt sym_table ~funret body
 
+and check_double_assign sym_table expr loc =
+  let assigned_vars = Hashtbl.create 5 in
+  let add_or_fail (var: string) =
+    if (assigned_vars |> Hashtbl.find_opt) var |> Option.is_some
+      then except sym_table (Semantic_error (loc, "Variable assigned twice in the same statement"))
+      else (assigned_vars |> Hashtbl.add) var true in
+  let rec cda_aux expr =
+    match expr with
+      | Ast.Access acc -> (
+        match (@!) acc with
+          | Ast.AccVar _ -> ()
+          | Ast.AccDeref expr -> cda_aux ((@!)expr)
+          | Ast.AccIndex (acc, ind) -> cda_aux (Ast.Access(acc)); cda_aux ((@!)ind)
+      )
+      | Ast.Assign (acc,expr) -> ((
+        match (@!) acc with
+          | Ast.AccVar v -> add_or_fail v
+          | _ -> () 
+      ); cda_aux ((@!)expr))
+      | Ast.Addr acc -> cda_aux (Ast.Access(acc))
+      | Ast.UnaryOp (_, expr) -> cda_aux ((@!)expr)
+      | Ast.BinaryOp (_, lexpr, rexpr) -> cda_aux ((@!)lexpr); cda_aux ((@!)rexpr)
+      | Ast.Call (_, exprs) -> exprs |> List.iter (fun expr -> cda_aux ((@!)expr))
+      | Ast.Prepost (_, _, acc) ->  ((
+        match (@!) acc with
+          | Ast.AccVar v -> add_or_fail v
+          | _ -> () 
+      ))
+      | Ast.ILiteral _
+      | Ast.CLiteral _
+      | Ast.BLiteral _
+      | Ast.Nullptr -> ()
+  in cda_aux ((@!) expr)
 
 let add_library_functions sym_table =
   add_entry "print" (TFunc([TInt], TVoid)) sym_table >. ();

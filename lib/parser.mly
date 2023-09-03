@@ -11,6 +11,16 @@
       | VDPlain   of string
       | VDPointer of vardesc
       | VDArray   of vardesc * int option
+
+    let build_op_eq op lex ex loc =
+      annotate_node(Ast.Assign(
+        lex, 
+        annotate_node(Ast.BinaryOp(
+          op,
+          annotate_node(Ast.Access(lex)) dummy_pos,
+          ex
+        )) dummy_pos
+      )) loc
 %}
 
 /* Tokens declarations */
@@ -32,17 +42,20 @@
 %token <bool> BOOLEAN
 %token GETS LOR LAND EQ NEQ GT LT GEQ LEQ PLUS MINUS STAR SLASH PERC BANG AMP LBRACK
 %token LPAREN RPAREN RBRACK LBRACE RBRACE SEMICOLON COMMA
+%token INC DEC
+%token PLEQ MINEQ TIMEQ DIVEQ MODEQ
 
 /* Precedence and associativity specification */
 %nonassoc THEN
 %nonassoc ELSE
-%right    GETS              /* lowest precedence */
+%right    GETS PLEQ MINEQ TIMEQ DIVEQ MODEQ   /* lowest precedence */
 %left     LOR
 %left     LAND
 %left     EQ  NEQ 
 %nonassoc GT LT GEQ LEQ
 %left     PLUS MINUS
 %left     STAR SLASH PERC
+// %left     INC DEC
 %nonassoc BANG AMP
 %nonassoc LBRACK             /* highest precedence  */
 
@@ -165,9 +178,18 @@ rexpr:
   | aexpr                                                                 {$1}
   | id = IDENTIFIER LPAREN params = separated_list(COMMA, expr) RPAREN    {annotate_node(Ast.Call(id, params)) $loc}
   | lex = lexpr GETS ex = expr                                            {annotate_node(Ast.Assign(lex, ex)) $loc}
+  | lex = lexpr PLEQ ex = expr                                            {build_op_eq Ast.Add lex ex $loc}
+  | lex = lexpr MINEQ ex = expr                                           {build_op_eq Ast.Sub lex ex $loc}
+  | lex = lexpr TIMEQ ex = expr                                           {build_op_eq Ast.Mult lex ex $loc}
+  | lex = lexpr DIVEQ ex = expr                                           {build_op_eq Ast.Div lex ex $loc}
+  | lex = lexpr MODEQ ex = expr                                           {build_op_eq Ast.Mod lex ex $loc}
   | BANG ex = expr                                                        {annotate_node(Ast.UnaryOp(Ast.Not, ex)) $loc}
   | MINUS ex = expr                                                       {annotate_node(Ast.UnaryOp(Ast.Neg, ex)) $loc}
   | lhs = expr bo = binop rhs = expr                                      {annotate_node(Ast.BinaryOp(bo, lhs, rhs)) $loc}
+  | ex = lexpr INC                                                        {annotate_node(Ast.Prepost(Ast.Post, Ast.Incr, ex)) $loc}
+  | INC ex = lexpr                                                        {annotate_node(Ast.Prepost(Ast.Pre, Ast.Incr, ex)) $loc}
+  | ex = lexpr DEC                                                        {annotate_node(Ast.Prepost(Ast.Post, Ast.Decr, ex)) $loc}
+  | DEC ex = lexpr                                                        {annotate_node(Ast.Prepost(Ast.Pre, Ast.Decr, ex)) $loc}
 
 %inline binop:
   | PLUS    {Ast.Add}
