@@ -83,17 +83,19 @@ and stmtordec_node =
   | Stmt of stmt (* A statement   *)
 [@@deriving show]
 
-type fun_decl = {
+type fun_dec = {
   typ : typ;
   fname : string;
-  formals : (typ * identifier) list;
-  body : stmt;
+  formals : (typ * identifier) list
 }
+[@@deriving show]
+
+type fun_def = fun_dec * stmt
 [@@deriving show]
 
 type topdecl = topdecl_node annotated_node
 
-and topdecl_node = Fundecl of fun_decl | Vardec of typ * identifier
+and topdecl_node = Fundef of fun_def | Vardec of typ * identifier | Include of string | Fundec of fun_dec | Extern of topdecl_node
 [@@deriving show]
 
 type program = Prog of topdecl list [@@deriving show]

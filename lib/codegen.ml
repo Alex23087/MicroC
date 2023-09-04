@@ -31,7 +31,13 @@ let add_global_var mcmodule sym_table (typ, id) =
     Llvm.define_global id (typ |> typ_to_llvmtype |> const_null) mcmodule)
   ) >. ()
 
-let add_external_function_to_module mcmodule sym_table (fname, typ, formals)=
+let add_external_variable_to_module mcmodule sym_table (typ, id) =
+  sym_table |> (add_entry id (
+    Llvm.declare_global (typ |> typ_to_llvmtype) id  mcmodule)
+  ) >. ()
+
+let add_external_function_to_module mcmodule sym_table {fname; typ; formals}=
+  let formals = formals |> List.map (fun (typ, _) -> typ) in
   sym_table |> (add_entry fname (
     Llvm.declare_function fname (
       Llvm.function_type (typ_to_llvmtype typ) (
@@ -42,13 +48,19 @@ let add_external_function_to_module mcmodule sym_table (fname, typ, formals)=
     ) mcmodule)
   ) >. ()
 
-let add_function_to_module mcmodule sym_table fundecl =
+let add_extern_to_module mcmodule sym_table ext =
+  match ext with
+    | Vardec (typ, id) -> add_external_variable_to_module mcmodule sym_table (typ, id)
+    | Fundec fd -> add_external_function_to_module mcmodule sym_table fd
+    | _ -> failwith "This shouldn't happen"
+
+let add_function_to_module mcmodule sym_table fundef =
   let {
     typ;
     fname;
     formals;
     _
-  } = fundecl in
+  } = fundef in
   sym_table |> (add_entry fname (
     Llvm.define_function fname (
       Llvm.function_type (typ_to_llvmtype typ) (
@@ -59,14 +71,41 @@ let add_function_to_module mcmodule sym_table fundecl =
     ) mcmodule)
   ) >. ()
 
+let load_file filename =
+  let ic = open_in filename in 
+  let n = in_channel_length ic in
+  let s = Bytes.create n in
+  really_input ic s 0 n;
+  close_in ic;
+  Bytes.to_string s
+
+let process_source filename = 
+  let source = load_file filename in 
+  let lexbuf = Lexing.from_string ~with_positions:true source in 
+  lexbuf |>
+  Parsing.parse Scanner.next_token
+
+let rec include_lib mcmodule sym_table lib =
+  let lib_ast = process_source lib in
+  match lib_ast with
+    | Ast.Prog topdecls -> (
+      topdecls |> List.iter ((@!) >> (fun td -> match td with
+        | Include l-> include_lib mcmodule sym_table l
+        | _ -> add_extern_to_module mcmodule sym_table td)
+      )
+    )
+
 let add_topdecl_to_module mcmodule sym_table topdecl =
   match (@!) topdecl with
-    | Fundecl fd -> add_function_to_module mcmodule sym_table fd
+    | Fundef (fd, _) -> add_function_to_module mcmodule sym_table fd
     | Vardec (typ, id) -> add_global_var mcmodule sym_table (typ, id)
+    | Fundec _ -> failwith "This shouldn't happen" (* Bare Fundecs are not allowed outside of interface files*)
+    | Include lib -> include_lib mcmodule sym_table lib
+    | Extern ext -> add_extern_to_module mcmodule sym_table ext
 
 let has_terminator = insertion_block >> block_terminator >> Option.is_some
 
-let rec build_function sym_table fd = let {fname; formals; body; typ} = fd in
+let rec build_function sym_table (fd, body) = let {fname; formals; typ} = fd in
   let fundef = lookup fname sym_table in
   let builder = Llvm.builder_at_end ctx (Llvm.entry_block fundef) in
 
@@ -291,14 +330,14 @@ let to_llvm_module program =
       let sym_table = begin_block (empty_table ()) in
 
       (* Declare external library functions *)
-      add_external_function_to_module mcmodule sym_table ("print", TypV, [TypI]);
-      add_external_function_to_module mcmodule sym_table ("getint", TypI, []);
+      add_external_function_to_module mcmodule sym_table {Ast.fname = "print"; Ast.typ = TypV; Ast.formals = [(TypI, "n")]};
+      add_external_function_to_module mcmodule sym_table {Ast.fname ="getint"; Ast.typ = TypI; Ast.formals = []};
 
       topdecls |> List.iter
       (add_topdecl_to_module mcmodule sym_table);
 
       topdecls |>
-      List.filter_map (fun td -> match (@!) td with | Fundecl fd -> Some fd | _ -> None) |>
+      List.filter_map (fun td -> match (@!) td with | Fundef fd -> Some fd | _ -> None) |>
       List.iter (build_function sym_table);
 
       mcmodule

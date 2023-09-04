@@ -4,7 +4,7 @@
     (* Auxiliary definitions *)
     exception Lexing_error of Location.lexeme_pos * string
 
-    let keyword_table = Hashtbl.create 72
+    let keyword_table = Hashtbl.create 12
     let _ = List.iter (fun (key, tkn) -> Hashtbl.add keyword_table key tkn)
         [
             ("if", IF);
@@ -17,6 +17,8 @@
             ("void", VOID);
             ("NULL", NULL);
             ("bool", BOOL);
+            ("extern", EXTERN);
+            ("declare", EXTERN);
         ]
 
     let unescape ch lexbuf = match ch with
@@ -38,6 +40,7 @@ let alphanumeric = alpha | digit
 let hex = digit | ['a'-'f' 'A'-'F']
 let escape = '\\' ['\'' 'b' 'f' 't' '\\' 'r' 'n']
 
+let filename = (alphanumeric | ['.' '/' '-' '_'])*
 let identifier = (alpha | '_') (alphanumeric | '_')*
 let integer = digit+ | ("0x" hex+)
 let boolean = "true" | "false"
@@ -55,6 +58,8 @@ rule next_token = parse
 
 | "true"        {BOOLEAN (true)}
 | "false"       {BOOLEAN (false)}
+
+| "#include" (" ")? '<' (filename as file) '>'    {INCLUDE(file)}
 
 | identifier as ident
     { try

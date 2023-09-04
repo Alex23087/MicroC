@@ -12,6 +12,7 @@
       | VDPointer of vardesc
       | VDArray   of vardesc * int option
 
+    (* Translate expressions like `x += y` into `x = x + y` *)
     let build_op_eq op lex ex loc =
       annotate_node(Ast.Assign(
         lex, 
@@ -44,6 +45,8 @@
 %token LPAREN RPAREN RBRACK LBRACE RBRACE SEMICOLON COMMA
 %token INC DEC
 %token PLEQ MINEQ TIMEQ DIVEQ MODEQ
+%token <string> INCLUDE
+%token EXTERN
 
 /* Precedence and associativity specification */
 %nonassoc THEN
@@ -65,7 +68,8 @@
 %type <Ast.program> program    /* the parser returns a Ast.program value */
 %type <Ast.topdecl> topdecl
 %type <Ast.typ * Ast.identifier> vardecl
-%type <Ast.fun_decl> fundecl
+%type <Ast.fun_def> fundef
+%type <Ast.fun_dec> fundecl
 %type <vardesc> vardesc
 %type <Ast.stmt> block
 %type <Ast.stmtordec> stmtordec
@@ -85,8 +89,12 @@ program:
   | tds = list(topdecl) EOF        {Ast.Prog(tds)}
 
 topdecl:
+  | EXTERN vd = vardecl SEMICOLON          {let (typ, desc) = vd in annotate_node(Ast.Extern(Ast.Vardec(typ, desc))) $loc}
+  | EXTERN fd = fundecl  SEMICOLON          {annotate_node(Ast.Extern(Ast.Fundec fd)) $loc}
+  | fd = fundecl  SEMICOLON          {annotate_node(Ast.Fundec fd) $loc}
   | vd = vardecl SEMICOLON          {let (typ, desc) = vd in annotate_node(Ast.Vardec(typ, desc)) $loc}
-  | fd = fundecl                    {annotate_node(Ast.Fundecl(fd)) $loc}
+  | fd = fundef                    {annotate_node(Ast.Fundef(fd)) $loc}
+  | inc = INCLUDE                   {annotate_node(Ast.Include(inc)) $loc}
 
 vardecl:
   | t = typ vd = vardesc            {
@@ -106,12 +114,14 @@ vardesc:
   | vd = vardesc LBRACK size = INTEGER RBRACK     {VDArray (vd, (Some size))}
 
 fundecl:
-  | t = typ id = IDENTIFIER LPAREN params = separated_list(COMMA, vardecl) RPAREN b = block         {{
+  | t = typ id = IDENTIFIER LPAREN params = separated_list(COMMA, vardecl) RPAREN {{
     Ast.typ = t;
     Ast.fname = id;
     Ast.formals = params;
-    Ast.body = b
   }}
+
+fundef:
+  | fd = fundecl b = block         {(fd, b)}
 
 stmtordec:
   | vd = vardecl SEMICOLON                  {annotate_node(Ast.Dec (fst vd, snd vd)) $loc}

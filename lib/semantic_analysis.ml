@@ -55,16 +55,20 @@ let add_vardec_to_scope sym_table (identifier, typ) loc  =
     then Symbol_table.add_entry identifier microctyp sym_table
     else except sym_table (Semantic_error (loc, "Variable declared twice"))
 
-let add_topdecl_to_scope (td: Ast.topdecl) sym_table =
+let rec add_topdecl_to_scope (td: Ast.topdecl) sym_table =
   match ((@!) td) with
-    | Ast.Fundecl {Ast.typ; Ast.fname; Ast.formals; _} ->
+    (* External symbols are added just like regular ones to the symbol table *)
+    | Ast.Extern ext -> add_topdecl_to_scope ({Ast.node = ext; Ast.loc = (@@) td}) sym_table
+    | Ast.Fundec fd
+    | Ast.Fundef (fd, _) -> let {Ast.typ; Ast.fname; Ast.formals} = fd in
       if Symbol_table.lookup_local_block sym_table fname = None then
         sym_table |> Symbol_table.add_entry fname (TFunc (
-          formals |> List.map (fst >> typ_to_microc_type), 
+          formals |> List.map (fst >> typ_to_microc_type),
           typ_to_microc_type typ)
         )
-      else except sym_table (Semantic_error ((@@) td, "Function declared twice"))
+      else except sym_table (Semantic_error ((@@) td, "Function defined twice"))
     | Ast.Vardec (typ, identifier) -> add_vardec_to_scope sym_table (identifier, typ) ((@@) td)
+    | Ast.Include _ -> failwith "This shouldn't happen" (* Includes are removed before topdecls are passed here *)
       
 
 (* let formal_to_record frm = let (typ, id) = frm in (id, typ_to_microc_type typ) *)
@@ -75,12 +79,11 @@ let rec type_compatible lht rht =
     | (TPointer lt, TPointer rt) -> type_compatible lt rt
     | _ -> lht = rht
 
-let rec type_check_fundecl sym_table fd = 
+let rec type_check_fundef sym_table (fd, body) = 
   let {
     Ast.typ;
     Ast.fname;
     Ast.formals;
-    Ast.body;
   } = fd in 
   let funret = (Some (typ_to_microc_type typ)) in
 
@@ -293,27 +296,63 @@ let add_library_functions sym_table =
   add_entry "print" (TFunc([TInt], TVoid)) sym_table >. ();
   add_entry "getint" (TFunc([], TInt)) sym_table >. ()
 
-let type_check _p = 
+let load_file filename =
+  let ic = open_in filename in 
+  let n = in_channel_length ic in
+  let s = Bytes.create n in
+  really_input ic s 0 n;
+  close_in ic;
+  Bytes.to_string s
+
+let process_source filename = 
+  let source = load_file filename in 
+  let lexbuf = Lexing.from_string ~with_positions:true source in 
+  lexbuf |>
+  Parsing.parse Scanner.next_token
+
+let rec handle_program topdecl_queue _p =
+  let handle_program_aux = handle_program topdecl_queue in
+  let include_table = Hashtbl.create 5 in
+  let add_topdecl td = match (@!) td with
+    | Ast.Include lib -> ( (* Check if the file has already been included *)
+      if Hashtbl.find_opt include_table lib |> Option.is_none
+        then lib |> process_source |> handle_program_aux; Hashtbl.add include_table lib true
+    )
+    | Ast.Fundec _
+    | Ast.Extern _
+    | Ast.Vardec _
+    | Ast.Fundef _ -> Queue.add td topdecl_queue
+  in
   match _p with
   | Ast.Prog topdecls ->
-    let sym_table = begin_block (empty_table()) in
-    add_library_functions sym_table >.
-    List.iter (fun td -> add_topdecl_to_scope td sym_table >. ()) topdecls;
-    
-    let maintype = lookup_opt "main" sym_table in(
-      match maintype with
-        | None -> except sym_table (Semantic_error (Location.dummy_code_pos, "No main function defined"))
-        | Some t -> (
-          match t with
-            | TFunc ([], TInt) -> ()
-            | TFunc ([], TVoid) -> ()
-            | _ -> except sym_table (Semantic_error (Location.dummy_code_pos, "Main function has to be either `void main()` or `int main()`"))            
-        )
-    );
+    topdecls |> List.iter add_topdecl
 
-    topdecls
-    |> List.filter_map (
-      fun td -> match (@!) td with Ast.Fundecl f -> Some f | _ -> None)
-    |> List.iter (sym_table |> type_check_fundecl)
-    (* >. print_entries sym_table *)
-    >. _p
+let type_check _p = 
+  let sym_table = begin_block (empty_table()) in
+  add_library_functions sym_table >. ();
+
+  let topdecl_queue = Queue.create() in
+  handle_program topdecl_queue _p;
+
+  topdecl_queue |> Queue.iter (fun td -> add_topdecl_to_scope td sym_table >. ());
+    
+  let maintype = lookup_opt "main" sym_table in(
+    match maintype with
+      (* Main function presence check has been removed to enable separate compilation *)
+      (* | None -> except sym_table (Semantic_error (Location.dummy_code_pos, "No main function defined")) *)
+      | Some t -> (
+        match t with
+          | TFunc ([], TInt) -> ()
+          | TFunc ([], TVoid) -> ()
+          | _ -> except sym_table (Semantic_error (Location.dummy_code_pos, "Main function has to be either `void main()` or `int main()`"))            
+      )
+      | _ -> ()
+  );
+
+  topdecl_queue
+  |> Queue.to_seq
+  |> Seq.filter_map (
+    fun td -> match (@!) td with Ast.Fundef f -> Some f | _ -> None)
+  |> Seq.iter (sym_table |> type_check_fundef)
+  (* >. print_entries sym_table *)
+  >. _p
