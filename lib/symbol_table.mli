@@ -13,6 +13,7 @@ type microc_type =
   | TPointer of microc_type
   | TArray of microc_type * int option
   | TFunc of microc_type list * microc_type
+  | TFloat
   [@@deriving show]
 
 val typ_to_microc_type: Ast.typ -> microc_type 

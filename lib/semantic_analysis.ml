@@ -183,31 +183,46 @@ match (@!) expr with
   )
   | Ast.CLiteral _  -> TChar
   | Ast.BLiteral _  -> TBool
+  | Ast.FLiteral _  -> TFloat
   | Ast.Nullptr -> TPointer TVoid (* The C standard defines a null pointer as (void* )0 *)
   | Ast.UnaryOp (uop, exp)         -> (
     let etype = type_check_expr sym_table exp in
     match (uop, etype) with
     | (Ast.Neg, TInt) -> TInt
+    | (Ast.Neg, TFloat) -> TFloat
     | (Ast.Not, TBool) -> TBool
     | _ -> except sym_table (Semantic_error ((@@) expr, Printf.sprintf "Invalid operand for operator \"%s\"" (Ast.show_uop uop)))
   )
   | Ast.BinaryOp (binop, lhs, rhs)  -> (
     let lhstype = type_check_expr sym_table lhs in
     let rhstype = type_check_expr sym_table rhs in
+    let compatible lt rt = match (lt, rt) with
+      | (TInt, TInt)      -> true
+      | (TFloat, TFloat)  -> true
+      | (TInt, TFloat)    -> true
+      | (TFloat, TInt)    -> true
+      | _                 -> false
+    in let getT lt rt = match (lt, rt) with
+      | (TInt, TInt)      -> TInt
+      | (TFloat, TFloat)  -> TFloat
+      | (TInt, TFloat)    -> TFloat
+      | (TFloat, TInt)    -> TFloat
+      | _                 -> failwith "Impossible"
+    in
     match (binop, lhstype, rhstype) with
-      | (Ast.Add, TInt, TInt)         -> TInt
-      | (Ast.Sub, TInt, TInt)         -> TInt
-      | (Ast.Mult, TInt, TInt)        -> TInt
-      | (Ast.Div, TInt, TInt)         -> TInt
-      | (Ast.Mod, TInt, TInt)         -> TInt
-      | (Ast.Equal, l, r) when l = r  -> TBool
-      | (Ast.Neq, l, r)   when l = r  -> TBool
-      | (Ast.Less, TInt, TInt)        -> TBool
-      | (Ast.Leq, TInt, TInt)         -> TBool
-      | (Ast.Greater, TInt, TInt)     -> TBool
-      | (Ast.Geq, TInt, TInt)         -> TBool
-      | (Ast.And, TBool, TBool)       -> TBool
-      | (Ast.Or, TBool, TBool)        -> TBool
+      | (Ast.Add, _, _)         when compatible lhstype rhstype -> getT lhstype rhstype
+      | (Ast.Sub, _, _)         when compatible lhstype rhstype -> getT lhstype rhstype
+      | (Ast.Mult, _, _)        when compatible lhstype rhstype -> getT lhstype rhstype
+      | (Ast.Div, _, _)         when compatible lhstype rhstype -> getT lhstype rhstype
+      | (Ast.Mod, _, _)         when compatible lhstype rhstype -> getT lhstype rhstype
+      | (Ast.Equal, l, r)       when l = r                      -> TBool
+      | (Ast.Neq, l, r)         when l = r                      -> TBool
+      | (Ast.Less, _, _)        when compatible lhstype rhstype -> TBool
+      | (Ast.Leq, _, _)         when compatible lhstype rhstype -> TBool
+      | (Ast.Greater, _, _)     when compatible lhstype rhstype -> TBool
+      | (Ast.Geq, _, _)         when compatible lhstype rhstype -> TBool
+      | (Ast.And, TBool, TBool)                                 -> TBool
+      | (Ast.Or, TBool, TBool)                                  -> TBool
       
       | _ -> except sym_table (Semantic_error ((@@) expr, Printf.sprintf "Invalid operands for operator \"%s\"" (Ast.show_binop binop)))
   )
@@ -317,6 +332,7 @@ and check_double_assign sym_table expr loc =
       | Ast.ILiteral _
       | Ast.CLiteral _
       | Ast.BLiteral _
+      | Ast.FLiteral _
       | Ast.Nullptr -> ()
   in cda_aux ((@!) expr)
 

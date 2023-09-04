@@ -36,6 +36,7 @@
 %token VOID
 %token NULL
 %token BOOL
+%token FLT
 %token <string> IDENTIFIER
 %token <int> INTEGER
 %token <float> FLOAT
@@ -135,6 +136,7 @@ typ:
   | CHAR                          {Ast.TypC}
   | VOID                          {Ast.TypV}
   | BOOL                          {Ast.TypB}
+  | FLT                           {Ast.TypF}
 
 stmt:
   | block                                                           {$1}
@@ -220,6 +222,7 @@ aexpr:
   | i = INTEGER                   {annotate_node(Ast.ILiteral(i)) $loc}
   | c = CHARACTER                 {annotate_node(Ast.CLiteral(c)) $loc}
   | b = BOOLEAN                   {annotate_node(Ast.BLiteral(b)) $loc}
+  | f = FLOAT                     {annotate_node(Ast.FLiteral(f)) $loc}
   | NULL                          {annotate_node(Ast.Nullptr) $loc}
   | LPAREN ex = rexpr RPAREN      {ex}
   | AMP ex = lexpr                {annotate_node (Ast.Addr(ex)) $loc}

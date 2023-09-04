@@ -12,3 +12,7 @@ int getint(){
 void print(int n){
   printf("%d\n", n);
 }
+
+void printfloat(float f){
+  printf("%f\n", f);
+}

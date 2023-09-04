@@ -24,6 +24,7 @@ let rec typ_to_llvmtype typ = (
     )
     | TypP t -> let ty = Llvm.pointer_type (typ_to_llvmtype t) in (fun _ -> ty)
     | TypV -> Llvm.void_type
+    | TypF -> Llvm.float_type
 ) ctx
 
 let add_global_var mcmodule sym_table (typ, id) =
@@ -161,6 +162,7 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
     | ILiteral i -> Llvm.const_int (TypI |> typ_to_llvmtype) i
     | CLiteral c -> Llvm.const_int (TypC |> typ_to_llvmtype) (c |> int_of_char)
     | BLiteral b -> Llvm.const_int (TypB |> typ_to_llvmtype) (b |> Bool.to_int)
+    | FLiteral f -> Llvm.const_float (TypF |> typ_to_llvmtype) (f)
     | Nullptr -> Llvm.const_null nulltype
     | UnaryOp (uop, expr) -> (
       let exprval = build_expr sym_table builder ~nulltype expr in
@@ -171,20 +173,37 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
     | BinaryOp (binop, lhs, rhs) -> (
       let lhsval = build_expr sym_table builder ~nulltype lhs in
       let rhsval = build_expr sym_table builder ~nulltype rhs in
+
+      let lhtype = lhsval |> type_of |> classify_type in
+      let rhtype = rhsval |> type_of |> classify_type in
+      let lhlf = lhtype = TypeKind.Float in
+      let rhlf = rhtype = TypeKind.Float in
+      let cond = lhlf || rhlf in
+      let lhsval = (
+        if cond && (not lhlf)
+          then Llvm.build_sitofp lhsval (Llvm.float_type ctx) (get_unique_name()) builder
+          else lhsval
+      ) in
+      let rhsval = (
+        if cond && (not rhlf)
+          then Llvm.build_sitofp rhsval (Llvm.float_type ctx) (get_unique_name()) builder
+          else rhsval
+      ) in
+      
       (match binop with
-      | Add -> Llvm.build_nsw_add
-      | Sub -> Llvm.build_nsw_sub
-      | Mult  -> Llvm.build_nsw_mul
-      | Div -> Llvm.build_sdiv
-      | Mod -> Llvm.build_srem
-      | Equal -> Llvm.build_icmp Icmp.Eq
-      | Neq -> Llvm.build_icmp Icmp.Ne
-      | Less  -> Llvm.build_icmp Icmp.Slt
-      | Leq -> Llvm.build_icmp Icmp.Sle
-      | Greater -> Llvm.build_icmp Icmp.Sgt
-      | Geq -> Llvm.build_icmp Icmp.Sge
-      | And -> Llvm.build_and
-      | Or -> Llvm.build_or)
+        | Add     -> if cond then Llvm.build_fadd else Llvm.build_nsw_add
+        | Sub     -> if cond then Llvm.build_fsub else Llvm.build_nsw_sub
+        | Mult    -> if cond then Llvm.build_fmul else Llvm.build_nsw_mul
+        | Div     -> if cond then Llvm.build_fdiv else Llvm.build_sdiv
+        | Mod     -> if cond then Llvm.build_frem else Llvm.build_srem
+        | Equal   -> (if cond then Llvm.build_fcmp Fcmp.Oeq else Llvm.build_icmp Icmp.Eq)
+        | Neq     -> (if cond then Llvm.build_fcmp Fcmp.One else Llvm.build_icmp Icmp.Ne)
+        | Less    -> (if cond then Llvm.build_fcmp Fcmp.Olt else Llvm.build_icmp Icmp.Slt)
+        | Leq     -> (if cond then Llvm.build_fcmp Fcmp.Ole else Llvm.build_icmp Icmp.Sle)
+        | Greater -> (if cond then Llvm.build_fcmp Fcmp.Oge else Llvm.build_icmp Icmp.Sgt)
+        | Geq     -> (if cond then Llvm.build_fcmp Fcmp.Ogt else Llvm.build_icmp Icmp.Sge)
+        | And     -> Llvm.build_and
+        | Or      -> Llvm.build_or)
       lhsval rhsval (get_unique_name()) builder
     )
     | Call (funcname, params) -> (

@@ -15,6 +15,7 @@ type microc_type =
   | TPointer of microc_type
   | TArray of microc_type * int option
   | TFunc of microc_type list * microc_type
+  | TFloat
   [@@deriving show]
 
 let rec typ_to_microc_type (typ: Ast.typ) = match typ with
@@ -24,6 +25,7 @@ let rec typ_to_microc_type (typ: Ast.typ) = match typ with
   | Ast.TypV  -> TVoid
   | Ast.TypP typp  -> TPointer (typ_to_microc_type typp)
   | Ast.TypA (typa, size) -> TArray ((typ_to_microc_type typa), size)
+  | Ast.TypF  -> TFloat
 
 
 let empty_table = Stack.create

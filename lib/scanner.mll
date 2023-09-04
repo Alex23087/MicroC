@@ -13,6 +13,7 @@
             ("for", FOR);
             ("while", WHILE);
             ("int", INT);
+            ("float", FLT);
             ("char", CHAR);
             ("void", VOID);
             ("NULL", NULL);
@@ -43,6 +44,7 @@ let escape = '\\' ['\'' 'b' 'f' 't' '\\' 'r' 'n']
 let filename = (alphanumeric | ['.' '/' '-' '_'])*
 let identifier = (alpha | '_') (alphanumeric | '_')*
 let integer = digit+ | ("0x" hex+)
+let float = ((digit* '.' digit+) ('f')?) | (integer 'f') 
 let boolean = "true" | "false"
 
 let operator = ['&' '+' '-' '*' '/' '%' '=' '<' '>' '!'] | "==" | "!=" | "<=" | ">=" | "&&" | "||"
@@ -66,6 +68,14 @@ rule next_token = parse
         Hashtbl.find keyword_table ident
         with Not_found -> IDENTIFIER ident
     }
+| float as flot     {FLOAT (
+    Printf.printf "%s\n\n%!" flot;
+    if flot |> String.ends_with ~suffix:"f"
+        then let s = String.sub flot 0 ((String.length flot) - 1) in
+            Printf.printf "%s\n\n%!" s;
+            Float.of_string s
+        else Float.of_string flot
+)}
 | integer as intg    {INTEGER (int_of_string intg)} (* TODO: Range checks? *)
 | '\'' ((_ | escape) as chara) '\''
     {
