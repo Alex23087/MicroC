@@ -7,11 +7,9 @@ float pi(int iter){
     int sign;
     sign = 1;
     int i;
-    i = 1;
-    while(i < iter * 2){
+    for(i = 1; i < iter * 2; i += 2){
         acc += (1/itof(i)) * sign;
         sign *= -1;
-        i += 2;
     }
     return acc * 4;
 }

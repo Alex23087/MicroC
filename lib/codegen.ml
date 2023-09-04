@@ -216,10 +216,20 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
       let param_array = (
         params |>
         List.mapi
-          (fun i expr -> 
+          (fun i expr ->
             let v = build_expr sym_table builder ~nulltype:(Llvm.param func i |> Llvm.type_of) expr in
-            if v |> type_of |> element_type |> classify_type <> TypeKind.Array then v
-            else Llvm.build_bitcast v (v |> type_of |> element_type |> element_type |> Llvm.pointer_type)(get_unique_name()) builder
+            let v = (
+              match (@!) expr with
+                | SLiteral _ -> (
+                  let allocated_string = Llvm.build_array_alloca (v |> type_of) (Llvm.const_int (Llvm.i32_type ctx) 1) (get_unique_name()) builder in
+                  Llvm.build_store v allocated_string builder >.
+                  allocated_string
+                )
+                | _ -> v
+            ) in
+            match v |> type_of |> element_type |> classify_type with
+              | TypeKind.Array -> Llvm.build_bitcast v (v |> type_of |> element_type |> element_type |> Llvm.pointer_type)(get_unique_name()) builder
+              | _ -> v
           )
         |> Array.of_list) in
       Llvm.build_call func param_array (
@@ -234,11 +244,22 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
          then return either the old value or the new one depending on pre/post operation *)
       let valloc = build_access sym_table builder ~load:false acc in
       let oldval = Llvm.build_load valloc (get_unique_name()) builder in
+      let oldvaltype = oldval |> type_of |> classify_type in
       let newval = (
         match op with
-          | Incr -> (Llvm.build_add oldval (Llvm.const_int (Llvm.i32_type ctx) 1) (get_unique_name()) builder)
-          | Decr -> (Llvm.build_add oldval (Llvm.const_int (Llvm.i32_type ctx) 1) (get_unique_name()) builder)
-      ) in
+          | Incr -> (
+            match oldvaltype with
+              | TypeKind.Integer  -> Llvm.build_nsw_add oldval (Llvm.const_int (Llvm.i32_type ctx) 1)
+              | TypeKind.Float    -> Llvm.build_fadd oldval (Llvm.const_float (Llvm.float_type ctx) 1.0)
+              | _                 -> failwith "Cannot increment non-numerical value"
+          )
+          | Decr -> (
+            match oldvaltype with
+              | TypeKind.Integer  -> Llvm.build_nsw_sub oldval (Llvm.const_int (Llvm.i32_type ctx) 1)
+              | TypeKind.Float    -> Llvm.build_fsub oldval (Llvm.const_float (Llvm.float_type ctx) 1.0)
+              | _                 -> failwith "Cannot decrement non-numerical value"
+          )
+      )  (get_unique_name()) builder in
       Llvm.build_store newval valloc builder >.
       match pp with
         | Pre -> newval

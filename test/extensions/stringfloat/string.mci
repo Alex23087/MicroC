@@ -1,1 +1,3 @@
 void prints(char str[]);
+void strcat(char out[], char in1[], char in2[]);
+void strzero(char s[], int len);

@@ -25,6 +25,7 @@
         ]
 
     let unescape ch lexbuf = match ch with
+        | '0'   ->  char_of_int 0x00
         | '\''  ->  '\''
         | 'b'   ->  '\b'
         | 'f'   ->  char_of_int 0x0C
@@ -44,7 +45,7 @@ let alpha = ['a'-'z' 'A'-'Z']
 let digit = ['0'-'9']
 let alphanumeric = alpha | digit
 let hex = digit | ['a'-'f' 'A'-'F']
-let escape = '\\' ['\'' 'b' 'f' 't' '\\' 'r' 'n']
+let escape = '\\' ['0' '\'' 'b' 'f' 't' '\\' 'r' 'n']
 
 let filename = (alphanumeric | ['.' '/' '-' '_'])*
 let identifier = (alpha | '_') (alphanumeric | '_')*
@@ -82,11 +83,11 @@ rule next_token = parse
         else Float.of_string flot
 )}
 | integer as intg    {INTEGER (int_of_string intg)} (* TODO: Range checks? *)
-| '\'' ((_ | escape) as chara) '\''
+| "'" ((_ | escape) as chara) "'"
     {
         CHARACTER (
-            match chara.[1] with
-                | '\\'  -> unescape (chara.[2]) lexbuf
+            match chara.[0] with
+                | '\\'  -> unescape (chara.[1]) lexbuf
                 | c     -> c
         )
     }
@@ -139,16 +140,18 @@ and single_line_comment = parse
 and block_comment = parse
     | "*/"      {next_token lexbuf}               (* Go back to main scanner *)
     | newline   {Lexing.new_line lexbuf; block_comment lexbuf}
+    | eof       {raise (Lexing_error (Location.to_lexeme_position lexbuf, "Unterminated block comment"))}
     | _         {block_comment lexbuf}
 
 and string_literal = parse
     | '"'       {()}
+    | eof       {raise (Lexing_error (Location.to_lexeme_position lexbuf, "Unterminated string"))}
     | ((_ | escape) as chara)
     {
         Buffer.add_char string_buffer
         (
             match chara.[0] with
-                | '\\'  -> unescape (chara.[2]) lexbuf
+                | '\\'  -> unescape (chara.[1]) lexbuf
                 | c     -> c
         ); string_literal lexbuf
     }

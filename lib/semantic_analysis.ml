@@ -13,12 +13,12 @@ let (>>>) f g x y = g(f(x)(y))
 (* let (<<) f g x = f(g(x)) *)
 
 (* Arrays with size < 1 should not be allowed *)
-let rec array_size_check sym_table typ loc =
+let rec array_size_check sym_table typ array_size_zero_allowed loc =
   match typ with
     | TArray (t, size) -> (
-      if Option.value size ~default:2 < 1 (* Default value is 2 as arrays with no size declared should be valid *)
+      if Option.value size ~default:(if array_size_zero_allowed then 2 else 0) < 1 (* Default value is 2 as arrays with no size declared should be valid *)
         then except sym_table (Semantic_error (loc, "Declaring an array of size less than 1"))
-        else array_size_check sym_table t loc
+        else array_size_check sym_table t array_size_zero_allowed loc
     )
     | _ -> ()
 
@@ -45,9 +45,9 @@ let function_return_type_check sym_table typ loc =
     )
     | _ -> ()
 
-let add_vardec_to_scope sym_table (identifier, typ) loc  =
+let add_vardec_to_scope sym_table (identifier, typ) ?(array_size_zero_allowed = false) loc  =
   let microctyp = typ_to_microc_type typ in
-  array_size_check sym_table microctyp loc >. ();
+  array_size_check sym_table microctyp array_size_zero_allowed loc >. ();
   array_dimension_check sym_table microctyp loc >. ();
   if microctyp = TVoid then except sym_table (Semantic_error (loc, Printf.sprintf "Variables cannot be of type %s" (show_microc_type TVoid)));
   function_return_type_check sym_table microctyp loc >. ();
@@ -117,7 +117,7 @@ let rec type_check_fundef sym_table (fd, body) =
   let parameter_block = begin_block sym_table in
 
   formals
-  |> List.iter (fun (typ, id) -> add_vardec_to_scope parameter_block (id, typ) ((@@) body) >. ()) >. ();
+  |> List.iter (fun (typ, id) -> add_vardec_to_scope parameter_block (id, typ) ~array_size_zero_allowed:true ((@@) body) >. ()) >. ();
 
 
   check_deadcode body >. ();
@@ -245,9 +245,10 @@ match (@!) expr with
       | None -> except sym_table (Semantic_error ((@@) expr, Printf.sprintf "Calling undefined function \"%s\"" fname))
   )
   | Ast.Prepost (_, _, acc) -> (
-    if type_check_access sym_table acc = TInt
-      then TInt
-      else except sym_table (Semantic_error ((@@) expr, "Trying to increment or decrement non-int value"))
+    let typ = type_check_access sym_table acc in
+    if typ = TInt || typ = TFloat
+      then typ
+      else except sym_table (Semantic_error ((@@) expr, "Trying to increment or decrement non-numerical value"))
   )
 
 and type_check_access sym_table acc =

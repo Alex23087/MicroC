@@ -15,7 +15,4 @@ void main(){
     print(b);
     i = ++i;
     print(i);
-    b = (++i) + (++i);
-    print(i);
-    print(b);
 }

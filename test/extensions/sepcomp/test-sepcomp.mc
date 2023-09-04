@@ -1,5 +1,5 @@
 #include <math.mci>
 
 void main(){
-    print(fact(getint()));
+    print(fact(14));
 }
