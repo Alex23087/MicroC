@@ -70,8 +70,35 @@ let rec add_topdecl_to_scope (td: Ast.topdecl) sym_table =
     | Ast.Vardec (typ, identifier) -> add_vardec_to_scope sym_table (identifier, typ) ((@@) td)
     | Ast.Include _ -> failwith "This shouldn't happen" (* Includes are removed before topdecls are passed here *)
       
-
-(* let formal_to_record frm = let (typ, id) = frm in (id, typ_to_microc_type typ) *)
+(* statement -> ~ret:return has been encountered -> contains return*)
+let rec check_deadcode ?(ret = false) stmt =
+  match (@!) stmt with
+    | Ast.If (_, thenstmt, elsestmt) -> (
+      (* Bind to name to force function evaluation *)
+      let tret = check_deadcode thenstmt ~ret in
+      let eret = check_deadcode elsestmt ~ret in
+      tret && eret
+    )
+    | Ast.While (_, body) -> (
+      (* Check deadcode, but return false, as we don't know if it will be reached *)
+      check_deadcode body ~ret >. false
+    )
+    | Ast.Expr _ -> false (* Expressions cannot return *)
+    | Ast.Return _ -> true (* Return returns *)
+    | Ast.Block stmts -> (
+      match stmts with
+        | x::xs -> (
+          if ret then raise (Semantic_error ((@@) x, "Dead code"));
+          match (@!) x with
+            | Ast.Stmt x -> (
+              let r = check_deadcode x ~ret in
+              (check_deadcode ({Ast.node = Ast.Block xs; Ast.loc = Location.dummy_code_pos}) ~ret:r)
+              || r
+            )
+            | Ast.Dec _ -> check_deadcode ({Ast.node = Ast.Block xs; Ast.loc = Location.dummy_code_pos}) ~ret
+        )
+        | [] -> false
+    )
 
 let rec type_compatible lht rht =
   match (lht, rht) with
@@ -93,6 +120,7 @@ let rec type_check_fundef sym_table (fd, body) =
   |> List.iter (fun (typ, id) -> add_vardec_to_scope parameter_block (id, typ) ((@@) body) >. ()) >. ();
 
 
+  check_deadcode body >. ();
   type_check_stmt parameter_block ~funret ~isfun:true body;
   (* Check the presence of a return statement if the function is non-void and not main. Typing is checked by type_check_stmt *)
   if fname <> "main" && funret <> Some TVoid && not (check_return_presence body) then
