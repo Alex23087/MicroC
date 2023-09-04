@@ -16,3 +16,15 @@ void print(int n){
 void printfloat(float f){
   printf("%f\n", f);
 }
+
+void prints(char* str){
+  printf("%s", str);
+}
+
+int ftoi(float f){
+  return (int) f;
+}
+
+float itof(int i){
+  return (float) i;
+}

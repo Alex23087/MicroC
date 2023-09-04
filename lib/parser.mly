@@ -42,6 +42,7 @@
 %token <float> FLOAT
 %token <char> CHARACTER
 %token <bool> BOOLEAN
+%token <string> STRING
 %token GETS LOR LAND EQ NEQ GT LT GEQ LEQ PLUS MINUS STAR SLASH PERC BANG AMP LBRACK
 %token LPAREN RPAREN RBRACK LBRACE RBRACE SEMICOLON COMMA
 %token INC DEC
@@ -223,6 +224,7 @@ aexpr:
   | c = CHARACTER                 {annotate_node(Ast.CLiteral(c)) $loc}
   | b = BOOLEAN                   {annotate_node(Ast.BLiteral(b)) $loc}
   | f = FLOAT                     {annotate_node(Ast.FLiteral(f)) $loc}
+  | s = STRING                    {annotate_node(Ast.SLiteral(s)) $loc}
   | NULL                          {annotate_node(Ast.Nullptr) $loc}
   | LPAREN ex = rexpr RPAREN      {ex}
   | AMP ex = lexpr                {annotate_node (Ast.Addr(ex)) $loc}

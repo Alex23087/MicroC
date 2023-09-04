@@ -167,9 +167,11 @@ match (@!) expr with
   | Ast.Access acc -> type_check_access sym_table acc
   | Ast.Assign (acc, exp) -> (
     let atype = type_check_access sym_table acc in
-    match atype with TArray _ -> except sym_table (Semantic_error ((@@) expr, "Cannot assign array")) | _ ->
+    match atype with
+      | TArray (t, _) when t <> TChar -> except sym_table (Semantic_error ((@@) expr, "Cannot assign array"))
+      | _ ->
     let etype = type_check_expr sym_table exp in
-    if atype = etype
+    if type_compatible atype etype
       then etype
       else except sym_table (Semantic_error ((@@) expr, "Assigning value of a wrong type"))
   )
@@ -184,6 +186,7 @@ match (@!) expr with
   | Ast.CLiteral _  -> TChar
   | Ast.BLiteral _  -> TBool
   | Ast.FLiteral _  -> TFloat
+  | Ast.SLiteral s  -> TArray (TChar, Some((String.length s) + 1))
   | Ast.Nullptr -> TPointer TVoid (* The C standard defines a null pointer as (void* )0 *)
   | Ast.UnaryOp (uop, exp)         -> (
     let etype = type_check_expr sym_table exp in
@@ -333,6 +336,7 @@ and check_double_assign sym_table expr loc =
       | Ast.CLiteral _
       | Ast.BLiteral _
       | Ast.FLiteral _
+      | Ast.SLiteral _
       | Ast.Nullptr -> ()
   in cda_aux ((@!) expr)
 
@@ -354,13 +358,14 @@ let process_source filename =
   lexbuf |>
   Parsing.parse Scanner.next_token
 
+let include_table = Hashtbl.create 5
+
 let rec handle_program topdecl_queue _p =
   let handle_program_aux = handle_program topdecl_queue in
-  let include_table = Hashtbl.create 5 in
   let add_topdecl td = match (@!) td with
     | Ast.Include lib -> ( (* Check if the file has already been included *)
       if Hashtbl.find_opt include_table lib |> Option.is_none
-        then lib |> process_source |> handle_program_aux; Hashtbl.add include_table lib true
+        then (Hashtbl.add include_table lib true; lib |> process_source |> handle_program_aux)
     )
     | Ast.Fundec _
     | Ast.Extern _

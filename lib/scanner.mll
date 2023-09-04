@@ -4,6 +4,8 @@
     (* Auxiliary definitions *)
     exception Lexing_error of Location.lexeme_pos * string
 
+    let string_buffer = Buffer.create 256
+
     let keyword_table = Hashtbl.create 12
     let _ = List.iter (fun (key, tkn) -> Hashtbl.add keyword_table key tkn)
         [
@@ -35,6 +37,9 @@
 }
 
 (* Scanner specification *)
+
+(* Buffer used to parse string literals *)
+
 let alpha = ['a'-'z' 'A'-'Z']
 let digit = ['0'-'9']
 let alphanumeric = alpha | digit
@@ -55,6 +60,8 @@ let newline = ['\n' '\r'] | "\r\n"
 let whitespace = [' ' '\t']
 
 rule next_token = parse
+| '"'       {Buffer.clear string_buffer; string_literal lexbuf;
+                let s = Buffer.contents string_buffer in STRING s}
 | "/*"      {block_comment lexbuf}
 | "//"      {single_line_comment lexbuf}
 
@@ -69,10 +76,8 @@ rule next_token = parse
         with Not_found -> IDENTIFIER ident
     }
 | float as flot     {FLOAT (
-    Printf.printf "%s\n\n%!" flot;
     if flot |> String.ends_with ~suffix:"f"
         then let s = String.sub flot 0 ((String.length flot) - 1) in
-            Printf.printf "%s\n\n%!" s;
             Float.of_string s
         else Float.of_string flot
 )}
@@ -135,3 +140,15 @@ and block_comment = parse
     | "*/"      {next_token lexbuf}               (* Go back to main scanner *)
     | newline   {Lexing.new_line lexbuf; block_comment lexbuf}
     | _         {block_comment lexbuf}
+
+and string_literal = parse
+    | '"'       {()}
+    | ((_ | escape) as chara)
+    {
+        Buffer.add_char string_buffer
+        (
+            match chara.[0] with
+                | '\\'  -> unescape (chara.[2]) lexbuf
+                | c     -> c
+        ); string_literal lexbuf
+    }

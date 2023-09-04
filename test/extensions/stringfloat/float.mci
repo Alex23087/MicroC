@@ -1,0 +1,3 @@
+void printfloat(float f);
+int ftoi(float f);
+float itof(int i);

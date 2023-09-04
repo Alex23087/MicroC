@@ -34,16 +34,15 @@ let add_global_var mcmodule sym_table (typ, id) =
 
 let add_external_variable_to_module mcmodule sym_table (typ, id) =
   sym_table |> (add_entry id (
-    Llvm.declare_global (typ |> typ_to_llvmtype) id  mcmodule)
+    Llvm.declare_global (typ |> typ_to_llvmtype) id mcmodule)
   ) >. ()
 
 let add_external_function_to_module mcmodule sym_table {fname; typ; formals}=
-  let formals = formals |> List.map (fun (typ, _) -> typ) in
   sym_table |> (add_entry fname (
     Llvm.declare_function fname (
       Llvm.function_type (typ_to_llvmtype typ) (
         formals |>
-        List.map (typ_to_llvmtype) |>
+        List.map ((fun (typ, _) -> match typ with | TypA (t, _) -> TypP t | _ -> typ) >> typ_to_llvmtype) |>
         Array.of_list
       )
     ) mcmodule)
@@ -60,7 +59,6 @@ let add_function_to_module mcmodule sym_table fundef =
     typ;
     fname;
     formals;
-    _
   } = fundef in
   sym_table |> (add_entry fname (
     Llvm.define_function fname (
@@ -86,12 +84,17 @@ let process_source filename =
   lexbuf |>
   Parsing.parse Scanner.next_token
 
+let include_table = Hashtbl.create 5
+
 let rec include_lib mcmodule sym_table lib =
   let lib_ast = process_source lib in
   match lib_ast with
     | Ast.Prog topdecls -> (
       topdecls |> List.iter ((@!) >> (fun td -> match td with
-        | Include l-> include_lib mcmodule sym_table l
+        | Include l-> (
+          if (include_table |> Hashtbl.find_opt) l |> Option.is_none
+            then ((include_table |> Hashtbl.add) l true ;include_lib mcmodule sym_table l)
+        )
         | _ -> add_extern_to_module mcmodule sym_table td)
       )
     )
@@ -155,6 +158,7 @@ and build_block sym_table builder block =
   sym_table |> end_block >. ()
 
 and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr =
+  (* builder |> insertion_block |> block_parent |> global_parent |> string_of_llmodule |> Printf.printf "%s\n\n\n\n%!"; *)
   match (@!) expr with
     | Access acc -> build_access sym_table builder ~load:true acc
     | Assign (acc, expr) -> build_assign sym_table builder (acc, expr)
@@ -163,6 +167,7 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
     | CLiteral c -> Llvm.const_int (TypC |> typ_to_llvmtype) (c |> int_of_char)
     | BLiteral b -> Llvm.const_int (TypB |> typ_to_llvmtype) (b |> Bool.to_int)
     | FLiteral f -> Llvm.const_float (TypF |> typ_to_llvmtype) (f)
+    | SLiteral s -> Llvm.const_stringz ctx s
     | Nullptr -> Llvm.const_null nulltype
     | UnaryOp (uop, expr) -> (
       let exprval = build_expr sym_table builder ~nulltype expr in
@@ -349,6 +354,7 @@ let to_llvm_module program =
       let sym_table = begin_block (empty_table ()) in
 
       (* Declare external library functions *)
+      (* Could be done with include, but it's left here to make tests work without needing to include interfaces *)
       add_external_function_to_module mcmodule sym_table {Ast.fname = "print"; Ast.typ = TypV; Ast.formals = [(TypI, "n")]};
       add_external_function_to_module mcmodule sym_table {Ast.fname ="getint"; Ast.typ = TypI; Ast.formals = []};
 
