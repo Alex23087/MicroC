@@ -1,7 +1,7 @@
 open Symbol_table
 exception Semantic_error of Location.code_pos * string
 
-let except _ exn =
+let except _ exn = (* Debug function to print the symbol table on failure *)
   (* Symbol_table.print_entries sym_table; *)
   raise exn
 
