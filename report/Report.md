@@ -1,7 +1,5 @@
 # Microc
 
-05/09/2023
-
 ### Extensions added:
  - Pre and postfix, and assignment shorthand operators (++, --, +=, -+, *=, /=, %=)
  - Separate compilation (interfaces and extern, see below)
@@ -31,6 +29,10 @@ AST translations have been preferred to modifying the structure of the AST itsel
 This also applies to shorthand assignment operators, as for example with `x += y`, which is rewritten as `x = x + y`.\
 Empty statements are compiled as an empty block (which is a statement), instead of adding an empty statement node.
 
+<br/>
+<br/>
+<br/>
+
 ### AST Modifications
 Despite rewriting most constructs with existing AST nodes, the following modifications have been made:
  - Added `TypF` representing `float`s;
@@ -52,7 +54,7 @@ A block of the symbol table is implemented with a mutable `Hashtbl`, while the s
 This is because of the [value restriction](http://ocamlverse.net/content/weak_type_variables.html) and because using a mutable data structure means we need multiple instances to handle multiple tables.
 
 Other modifications made to the interface are:
- - Added `lookup_opt` to handle lookups with `option`s instead of `exception`s. Left the original function so that the interface is backwards-compatible;
+ - Added `lookup_opt` to handle lookups with `option`s instead of `exception`s. The original function was left so that the interface is backwards-compatible;
  - Added `append_block`, which allows to push an already existing block on the stack. This was convenient together with `of_alist` to implement the creation of local blocks for functions starting from the formal parameters;
  - Added `print_entries` to recursively print symbols from the top of the stack (innermost block) all the way down to the bottom (outermost/global block) for debug purposes;
  - Added `lookup_local_block` to perform lookup only on the local (top) block. This is useful to check for name clashing, as variables are allowed to shadow variables from outer scopes, but not from the local one.
@@ -60,7 +62,7 @@ Other modifications made to the interface are:
 
 ### Semantic Analysis
 The following checks are in place:
- - Arrays cannot be of size < 1. Moreover, arrays that are declared as variables, either local or global, need to have a size defined. Arrays declared as parameters for functions need not to satisfy this rule;
+ - Arrays cannot be of size < 1. Moreover, arrays that are declared as variables, either local or global, need to have a size defined. Arrays declared as parameters for functions need not satisfy this rule;
  - Multidimensional arrays are not allowed;
  - Functions cannot return non-scalar values. This is checked during the semantic analysis step, despite already being enforced by the grammar implemented by the parser;
  - Variables cannot be of type `void`;
@@ -86,11 +88,11 @@ Another key decision is to convert arrays into pointers to array data for the pu
 
 Global variables are initialised to the default value of their respective type (using `Llvm.const_null`), while local ones are not. This is mainly due to the LLVM IR instruction set. Local variables could have been initialised to default values as well, but because a 'declare and initialize' statement has not been implemented, this would have caused many double initializations (which might be optimized out by an analysis checking value usage, but it has been decided to leave less work to optimizers in this case).
 
-To perform arithmetic operations, the `nsw` variants have been used, as they represent C semantics, and can have a good impact on performance. This also applies to `inbounds gep`s.
+To perform arithmetic operations, the `nsw` variants have been used, as they more closely represent C semantics, and can have a good impact on performance. This also applies to `inbounds gep`s.
 
 Importantly, it was not possible for some reason to define a target data layout and triplet, as an error occurred with LLVM stating there were no target architectures available.
 
-## Extensions
+## 4 - Extensions
 
 ### Pre-post
 Pre/post increments/decrements have been added, together with shorthand assignment operators.
@@ -107,11 +109,13 @@ Because this translation is carried out before the semantic analysis step, overl
 
 ### Separate Compilation <a name="sepcomp"></a>
 
-Separate compilation has been implemented:\
+Separate compilation has been implemented:
 
 An `extern` keyword has been defined, to allow to declare, but not define, external names (implemented with `Llvm.declare_global` or `Llvm.declare_function`).
 
 `.mc` source files can `#include` (or `#import`) `.mci` **interface files**. These do not work like C includes, but more like OCaml `.mli` interfaces.
+
+Functions can be declared without being defined, but only in interface files.
 
 The `extern` keyword can only appear in `.mc` source files, and not in `.mci` interface files.
 
@@ -127,16 +131,18 @@ The usual workflow to compile a program with this mechanism is:
  5. Link them together (e.g. with `llvm-link`)
  6. Compile the bitcode to an executable format
 
+This workflow technically allows for interop with other languages with LLVM frontends, and the runtime support implementing print functions (and other ones like typecasts) is an example, being written in C and compiled to LLVM bytecode by clang.
+
 ### Deadcode Detection <a name="deadcode"></a>
 
 A deadcode detection pass has been added to the semantic analysis of the programs. Initially, deadcode was accepted during this step, but was then rejected by LLVM, because it entailed generating code after a block terminator. This was initially solved at the codegen step, by not inserting statements if the block contained a terminator (such as a return).
 
-Later, a proper detection was added at the semantic analysis phase, rejecting programs that have unreachable code. This step is an under-approximation that is not very involved, and does not perform checks on the guard to consider whether a while will be executed or not. This means that, although a check is performed _inside_ the body of the while, the result will not be considered outside of its body. I.e.:
+Later, a proper detection was added at the semantic analysis phase, rejecting programs that have unreachable code. This step is an under-approximation that is not very involved, and does not perform checks on the guard to consider whether a `while` will be executed or not. This means that, although a check is performed _inside_ the body of the `while`, the result will not be considered outside of its body. I.e.:
 ```C
 while(true){
     return;
 }
-// Valid: We do not check if the while is executed, so we cannot assume it returns
+// Valid: We do not check if the body is executed, so we cannot assume it returns
 int i;
 ```
 ```C
@@ -163,12 +169,12 @@ The only support added in the language to strings is the presence of the new `'\
 `float`s have been implemented by adding a new type to the AST, and a new `FLiteral` to represent `float` literals.\
 Unlike `int`s, checks on `float` values are left to the functions used to generate them (`Float.of_string` in the lexer and `Llvm.const_float` in the codegen phase). An attempt to explicitly check them has been made, but OCaml using 64 bit floats does not help, and the only references found on the issue proposed [this approach](https://stackoverflow.com/questions/45362323/ieee-64-and-32-bit-float-validation-in-ocaml), which unfortunately created more issues than it solved, rejecting programs that should have been valid. Attempts have been made at checking validity allowing a margin of error, but said margin should have been too big to allow valid programs, so as said, it has been left to runtime functions to raise exceptions in case of illegal values.
 
-## Tests
+## 5 -  Tests
 
-All tests have been ran and compared (when available) to the expected output. All tests supposed to succeed do so, and those expected to fail do so as well, with the following exceptions:
- - `test-func2.mc` now fails because multiple assignment in the same statement are not allowed anymore
+All tests have been run and compared (when available) to the expected output. All tests supposed to succeed do so, and those expected to fail do so as well, with the following exceptions:
+ - `test-func2.mc` now fails because multiple assignments in the same statement are not allowed anymore;
  - `test-ops2.mc` now fails because `--42` is parsed as `--(42)`, and not `-(-(42))`, and `42` is not an lvalue, so it cannot be decremented;
  - `test-return1.mc` now fails because it contains dead code;
- - `fail-nomain.mc` now succeeds because to allow separate compilation the main check has been relaxed
+ - `fail-nomain.mc` now succeeds because to allow separate compilation the main check has been relaxed.
 
  Furthermore, a few more tests have been added to check the new features implemented. They are contained in `test/extensions`, categorised by the extension they were made for, although many tests include features implemented in other extensions. Scripts to compile them and run them are provided in each folder.
