@@ -1,5 +1,3 @@
-extern void prints(char s[]);
-
 void strcat(char out[], char in1[], char in2[]){
     int i;
     for(i = 0; in1[i] != '\0'; i++){

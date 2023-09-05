@@ -12,7 +12,7 @@ rm a.out &> /dev/null
 
 echo "Test - String 3: strcat"
 rm a.out &> /dev/null
-./compile.sh test-strcat.mc &> /dev/null
+./compile.sh test-strcat.mc strcat.mc &> /dev/null
 ./a.out
 
 echo "Test - Float 1"

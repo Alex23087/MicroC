@@ -5,20 +5,21 @@ let except _ exn =
   (* Symbol_table.print_entries sym_table; *)
   raise exn
 
+(* Utility and function-compositing functions *)
 let (>.) a b = let _ = a in b   (* `e >. ()` is equivalent to `ignore e` *)
-let (@!) node = match node with {Ast.node; _} -> node
-let (@@) node = match node with {Ast.loc; _} -> loc
+let (@!) node = match node with {Ast.node; _} -> node (* Get node *)
+let (@@) node = match node with {Ast.loc; _} -> loc (* Get location*)
 let (>>) f g x = g(f(x))
 let (>>>) f g x y = g(f(x)(y))
-(* let (<<) f g x = f(g(x)) *)
 
-(* Arrays with size < 1 should not be allowed *)
-let rec array_size_check sym_table typ array_size_zero_allowed loc =
+(* Arrays with size < 1 should not be allowed.
+   Arrays with no size are only allowed in function signatures. *)
+let rec array_size_check sym_table typ array_no_size_allowed loc =
   match typ with
     | TArray (t, size) -> (
-      if Option.value size ~default:(if array_size_zero_allowed then 2 else 0) < 1 (* Default value is 2 as arrays with no size declared should be valid *)
+      if Option.value size ~default:(if array_no_size_allowed then 2 else 0) < 1 (* Default value is 2 as arrays with no size declared should be valid *)
         then except sym_table (Semantic_error (loc, "Declaring an array of size less than 1"))
-        else array_size_check sym_table t array_size_zero_allowed loc
+        else array_size_check sym_table t array_no_size_allowed loc
     )
     | _ -> ()
 
@@ -35,6 +36,7 @@ let array_dimension_check sym_table typ loc =
       | _ -> ()
   in array_dimension_check_aux typ false
 
+(* Functions can only return scalar values (and void). This is already enforced by the grammar. *)
 let function_return_type_check sym_table typ loc =
   match typ with
     | TFunc (_, ret) -> (
@@ -45,9 +47,10 @@ let function_return_type_check sym_table typ loc =
     )
     | _ -> ()
 
-let add_vardec_to_scope sym_table (identifier, typ) ?(array_size_zero_allowed = false) loc  =
+(* Add a variable to a scope. This also carries out the checks on the validity of the type. *)
+let add_vardec_to_scope sym_table (identifier, typ) ?(array_no_size_allowed = false) loc  =
   let microctyp = typ_to_microc_type typ in
-  array_size_check sym_table microctyp array_size_zero_allowed loc >. ();
+  array_size_check sym_table microctyp array_no_size_allowed loc >. ();
   array_dimension_check sym_table microctyp loc >. ();
   if microctyp = TVoid then except sym_table (Semantic_error (loc, Printf.sprintf "Variables cannot be of type %s" (show_microc_type TVoid)));
   function_return_type_check sym_table microctyp loc >. ();
@@ -80,7 +83,7 @@ let rec check_deadcode ?(ret = false) stmt =
       tret && eret
     )
     | Ast.While (_, body) -> (
-      (* Check deadcode, but return false, as we don't know if it will be reached *)
+      (* Check deadcode, but return false, as we don't know if the body will be executed *)
       check_deadcode body ~ret >. false
     )
     | Ast.Expr _ -> false (* Expressions cannot return *)
@@ -93,16 +96,20 @@ let rec check_deadcode ?(ret = false) stmt =
             | Ast.Stmt x -> (
               let r = check_deadcode x ~ret in
               (check_deadcode ({Ast.node = Ast.Block xs; Ast.loc = Location.dummy_code_pos}) ~ret:r)
-              || r
+              || r (* A block returns if one of its statements returns. However, the or is
+                short-circuiting, so `|| r` has to be placed after checking for more statements. *)
             )
             | Ast.Dec _ -> check_deadcode ({Ast.node = Ast.Block xs; Ast.loc = Location.dummy_code_pos}) ~ret
         )
         | [] -> false
     )
 
+(* Check type compatibility for assignment or parameter passing.
+   This is a more coarse relation than equality, as arrays with size
+   can be assigned to arrays with no size. *)
 let rec type_compatible lht rht =
   match (lht, rht) with
-    | (TArray(lt, ls), TArray(rt, rs)) -> (type_compatible lt rt) && (ls = rs || ls = None) (* An array declared with no defined size can be assigned (in function parameters) another one with a defined size *)
+    | (TArray(lt, ls), TArray(rt, rs)) -> (type_compatible lt rt) && (ls = rs || ls = None)
     | (TPointer lt, TPointer rt) -> type_compatible lt rt
     | _ -> lht = rht
 
@@ -116,42 +123,22 @@ let rec type_check_fundef sym_table (fd, body) =
 
   let parameter_block = begin_block sym_table in
 
+  (* Add all parameters to the local scope *)
   formals
-  |> List.iter (fun (typ, id) -> add_vardec_to_scope parameter_block (id, typ) ~array_size_zero_allowed:true ((@@) body) >. ()) >. ();
+  |> List.iter (fun (typ, id) -> add_vardec_to_scope parameter_block (id, typ) ~array_no_size_allowed:true ((@@) body) >. ()) >. ();
 
-
-  check_deadcode body >. ();
   type_check_stmt parameter_block ~funret ~isfun:true body;
   (* Check the presence of a return statement if the function is non-void and not main. Typing is checked by type_check_stmt *)
-  if fname <> "main" && funret <> Some TVoid && not (check_return_presence body) then
+  let returns = check_deadcode body in
+  if fname <> "main" && funret <> Some TVoid && not returns then
     except parameter_block (Semantic_error ((@@)body, "No return in non-void function"));
   Symbol_table.end_block parameter_block >. ()
 
-and check_return_presence body =
-  match (@!) body with
-   (* If contains return if both branches contain return *)
-   | Ast.If (_, thenexpr, elseexpr) -> (
-    check_return_presence thenexpr &&
-    check_return_presence elseexpr
-   )
-   (* While contains return if its body contains return (no check for whether it is reached) *)
-   | Ast.While (_, body) -> check_return_presence body
-   | Ast.Return _ -> true
-   (* Block contains return if any of its statements contains return *)
-   | Ast.Block stmts -> 
-    stmts |>
-    List.filter_map (
-      (@!) >>
-      (fun s -> match s with Ast.Stmt s -> Some s | _ -> None)
-    ) |>
-    List.exists (check_return_presence)
-   | _ -> false
-
 and type_check_stmt sym_table ?(funret = None) ?(isfun = false) stmt = let {Ast.node; Ast.loc} = stmt in match node with
-  | Ast.If (guard, thenstmt, elsestmt)       -> type_check_if sym_table ~funret (guard, thenstmt, elsestmt)
-  | Ast.While (guard, body)    -> type_check_while sym_table ~funret (guard, body)
-  | Ast.Expr expr  -> check_double_assign sym_table expr ((@@) expr) >. type_check_expr sym_table expr >. ()
-  | Ast.Return expr   -> (
+  | Ast.If (guard, thenstmt, elsestmt) -> type_check_if sym_table ~funret (guard, thenstmt, elsestmt)
+  | Ast.While (guard, body)            -> type_check_while sym_table ~funret (guard, body)
+  | Ast.Expr expr   -> check_double_assign sym_table expr ((@@) expr) >. type_check_expr sym_table expr >. ()
+  | Ast.Return expr -> ( (* Check for correct return type *)
     match funret with
       | None -> except sym_table (Semantic_error (loc, "Returning from non-function"))
       | Some funret-> (
@@ -162,11 +149,12 @@ and type_check_stmt sym_table ?(funret = None) ?(isfun = false) stmt = let {Ast.
   )
   | Ast.Block stmts    -> type_check_block sym_table ~funret ~isfun stmts
 
-and type_check_expr sym_table expr = (* Could check for constexprs and fix them at compile time *)
+and type_check_expr sym_table expr =
 match (@!) expr with
   | Ast.Access acc -> type_check_access sym_table acc
   | Ast.Assign (acc, exp) -> (
     let atype = type_check_access sym_table acc in
+    (* Only char arrays can be assigned for now. *)
     match atype with
       | TArray (t, _) when t <> TChar -> except sym_table (Semantic_error ((@@) expr, "Cannot assign array"))
       | _ ->
@@ -185,7 +173,12 @@ match (@!) expr with
   )
   | Ast.CLiteral _  -> TChar
   | Ast.BLiteral _  -> TBool
-  | Ast.FLiteral _  -> TFloat
+  | Ast.FLiteral _  -> TFloat (*(
+    let f32 = Int32.float_of_bits (Int32.bits_of_float f) in
+    if f <> f32 && Float.abs(f -. f32) > Float.epsilon
+      then except sym_table (Semantic_error ((@@) expr, "Literal is not a valid 32 bit float"))
+      else TFloat
+  )*)
   | Ast.SLiteral s  -> TArray (TChar, Some((String.length s) + 1))
   | Ast.Nullptr -> TPointer TVoid (* The C standard defines a null pointer as (void* )0 *)
   | Ast.UnaryOp (uop, exp)         -> (
@@ -279,6 +272,9 @@ match node with
   )
 
 and type_check_block sym_table ?(funret = None) ?(isfun = false) block =
+  (* Block needs to be created only if this is not the top block in a
+     function definition, otherwise function parameters could be shadowed
+     as in Java. *)
   if not isfun then begin_block sym_table >. ();
   let rec type_check_block_aux block = (
   (match block with
@@ -305,11 +301,12 @@ and type_check_while sym_table ?(funret = None) (guard, body) =
     then except sym_table (Semantic_error ((@@) guard, Printf.sprintf "Expected guard to be of type %s, got type %s instead" (show_microc_type TBool) (show_microc_type guardtype)));
   type_check_stmt sym_table ~funret body
 
+(* Assigning to the same variable twice in the same statement is illegal, as it could lead to UB *)
 and check_double_assign sym_table expr loc =
   let assigned_vars = Hashtbl.create 5 in
   let add_or_fail (var: string) =
     if (assigned_vars |> Hashtbl.find_opt) var |> Option.is_some
-      then except sym_table (Semantic_error (loc, "Variable assigned twice in the same statement"))
+      then except sym_table (Semantic_error (loc, Printf.sprintf "Variable %s assigned twice in the same statement" var))
       else (assigned_vars |> Hashtbl.add) var true in
   let rec cda_aux expr =
     match expr with
@@ -359,15 +356,21 @@ let process_source filename =
   lexbuf |>
   Parsing.parse Scanner.next_token
 
+(* Table that contains all included interfaces, to avoid includin them multiple times
+   (this eliminates the issue of circular dependencies). *)
 let include_table = Hashtbl.create 5
 
-let rec handle_program topdecl_queue _p =
+(* Take an AST and enqueue all the topdecls to be checked, merging them ones from included interfaces. *)
+let rec handle_program topdecl_queue ?(is_included = false) _p =
   let handle_program_aux = handle_program topdecl_queue in
   let add_topdecl td = match (@!) td with
     | Ast.Include lib -> ( (* Check if the file has already been included *)
       if Hashtbl.find_opt include_table lib |> Option.is_none
-        then (Hashtbl.add include_table lib true; lib |> process_source |> handle_program_aux)
+        then (Hashtbl.add include_table lib true; lib |> process_source |> handle_program_aux ~is_included:true)
     )
+    | Ast.Fundec _ when not is_included -> raise (Semantic_error ((@@)td, "Function declarations cannot appear outside of interfaces"))
+    | Ast.Fundef _ when is_included     -> raise (Semantic_error (Location.dummy_code_pos, "Function definitions cannot appear inside interfaces")) (* Dummy pos is used because it's an error in an included file, which is not handled by the error display code *)
+    | Ast.Extern _ when is_included     -> raise (Semantic_error (Location.dummy_code_pos, "Cannot use \"extern\" keyword in included interfaces, all symbols are extern by default"))
     | Ast.Fundec _
     | Ast.Extern _
     | Ast.Vardec _
@@ -377,15 +380,19 @@ let rec handle_program topdecl_queue _p =
   | Ast.Prog topdecls ->
     topdecls |> List.iter add_topdecl
 
+(* Main type checking function *)
 let type_check _p = 
   let sym_table = begin_block (empty_table()) in
   add_library_functions sym_table >. ();
 
+  (* Add all topdecls to the queue, including the included ones *)
   let topdecl_queue = Queue.create() in
   handle_program topdecl_queue _p;
 
+  (* Add them all to the global scope, effectively hoisting all global symbols *)
   topdecl_queue |> Queue.iter (fun td -> add_topdecl_to_scope td sym_table >. ());
-    
+  
+  (* Check typing of the main function*)
   let maintype = lookup_opt "main" sym_table in(
     match maintype with
       (* Main function presence check has been removed to enable separate compilation *)
@@ -399,6 +406,7 @@ let type_check _p =
       | _ -> ()
   );
 
+  (* Check all the function bodies *)
   topdecl_queue
   |> Queue.to_seq
   |> Seq.filter_map (

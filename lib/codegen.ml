@@ -2,6 +2,7 @@ open Ast
 open Llvm
 open Symbol_table
 
+(* Utility and function-compositing functions *)
 let (>.) a b = let _ = a in b
 (* `e >. ()` is equivalent to `ignore e` *)
 let (@!) node = match node with {Ast.node; _} -> node
@@ -9,6 +10,8 @@ let (>>) f g x = g(f(x))
 (* let (<<) f g x = f(g(x)) *)
 
 let ctx = global_context()
+
+(* Global counter to create unique identifiers for LLVM IR *)
 let counter = ref 0
 let get_unique_name () = let i = !counter in incr counter >. i |> string_of_int
 
@@ -27,16 +30,19 @@ let rec typ_to_llvmtype typ = (
     | TypF -> Llvm.float_type
 ) ctx
 
+(* Define a global variable *)
 let add_global_var mcmodule sym_table (typ, id) =
   sym_table |> (add_entry id (
     Llvm.define_global id (typ |> typ_to_llvmtype |> const_null) mcmodule)
   ) >. ()
 
+(* Declare a global variable *)
 let add_external_variable_to_module mcmodule sym_table (typ, id) =
   sym_table |> (add_entry id (
     Llvm.declare_global (typ |> typ_to_llvmtype) id mcmodule)
   ) >. ()
 
+(* Declare a global function *)
 let add_external_function_to_module mcmodule sym_table {fname; typ; formals}=
   sym_table |> (add_entry fname (
     Llvm.declare_function fname (
@@ -48,12 +54,14 @@ let add_external_function_to_module mcmodule sym_table {fname; typ; formals}=
     ) mcmodule)
   ) >. ()
 
+(* Declare a global variable or function *)
 let add_extern_to_module mcmodule sym_table ext =
   match ext with
     | Vardec (typ, id) -> add_external_variable_to_module mcmodule sym_table (typ, id)
     | Fundec fd -> add_external_function_to_module mcmodule sym_table fd
     | _ -> failwith "This shouldn't happen"
 
+(* Define a global function *)
 let add_function_to_module mcmodule sym_table fundef =
   let {
     typ;
@@ -84,8 +92,10 @@ let process_source filename =
   lexbuf |>
   Parsing.parse Scanner.next_token
 
+(* Table used to avoid including the same interface multiple times *)
 let include_table = Hashtbl.create 5
 
+(* Declare all included symbols from lib *)
 let rec include_lib mcmodule sym_table lib =
   let lib_ast = process_source lib in
   match lib_ast with
@@ -107,12 +117,15 @@ let add_topdecl_to_module mcmodule sym_table topdecl =
     | Include lib -> include_lib mcmodule sym_table lib
     | Extern ext -> add_extern_to_module mcmodule sym_table ext
 
+(* Does the current block the builder is in have a terminator? *)
 let has_terminator = insertion_block >> block_terminator >> Option.is_some
 
 let rec build_function sym_table (fd, body) = let {fname; formals; typ} = fd in
+  (* At this point the function is already defined, get the llvalue *)
   let fundef = lookup fname sym_table in
   let builder = Llvm.builder_at_end ctx (Llvm.entry_block fundef) in
 
+  (* Build the parameter block *)
   sym_table |> begin_block >. ();
   formals |> List.iteri (
     fun i (_, id) -> add_entry id (
@@ -124,22 +137,20 @@ let rec build_function sym_table (fd, body) = let {fname; formals; typ} = fd in
       param_i_loc
     ) sym_table >. ());
 
+  (* Build body block *)
   build_stmt sym_table builder body;
 
-  (match builder |> insertion_block |> Llvm.block_terminator with
-    | Some _ -> ()
-    | None -> (
+  ( (* Build terminator if the block does not have one *)
+    if builder |> has_terminator |> not then
       if typ = TypV
         then Llvm.build_ret_void builder >. ()
         else (typ |> typ_to_llvmtype |> Llvm.const_null |> Llvm.build_ret) builder >. ()
-    )
   );
 
   sym_table |> end_block >. ()
 
 and build_stmt sym_table builder stmt =
-  (* builder |> insertion_block |> block_parent |> global_parent |> string_of_llmodule |>Printf.printf "%s\n\n\n\n%!"; *)
-  
+  (* builder |> insertion_block |> block_parent |> global_parent |> string_of_llmodule |> Printf.printf "%s\n\n\n\n%!"; *)
   if builder |> has_terminator then () else
   match (@!) stmt with
     | If (guard, thenstmt, elsestmt) -> build_if sym_table builder (guard, thenstmt, elsestmt)
@@ -158,7 +169,6 @@ and build_block sym_table builder block =
   sym_table |> end_block >. ()
 
 and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr =
-  (* builder |> insertion_block |> block_parent |> global_parent |> string_of_llmodule |> Printf.printf "%s\n\n\n\n%!"; *)
   match (@!) expr with
     | Access acc -> build_access sym_table builder ~load:true acc
     | Assign (acc, expr) -> build_assign sym_table builder (acc, expr)
@@ -179,6 +189,7 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
       let lhsval = build_expr sym_table builder ~nulltype lhs in
       let rhsval = build_expr sym_table builder ~nulltype rhs in
 
+      (* If one of the two operands is a float and the other one an int, convert the int to a float *)
       let lhtype = lhsval |> type_of |> classify_type in
       let rhtype = rhsval |> type_of |> classify_type in
       let lhlf = lhtype = TypeKind.Float in
@@ -213,12 +224,12 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
     )
     | Call (funcname, params) -> (
       let func = sym_table |> lookup funcname in
-      let param_array = (
+      let param_array = ( (* Convert the parameter list to the appropriate array *)
         params |>
         List.mapi
           (fun i expr ->
             let v = build_expr sym_table builder ~nulltype:(Llvm.param func i |> Llvm.type_of) expr in
-            let v = (
+            let v = ( (* If a string literal is passed to a function, it has to be allocated on the stack first *)
               match (@!) expr with
                 | SLiteral _ -> (
                   let allocated_string = Llvm.build_array_alloca (v |> type_of) (Llvm.const_int (Llvm.i32_type ctx) 1) (get_unique_name()) builder in
@@ -227,6 +238,7 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
                 )
                 | _ -> v
             ) in
+            (* Arrays are bitcasted to pointers for function calls *)
             match v |> type_of |> element_type |> classify_type with
               | TypeKind.Array -> Llvm.build_bitcast v (v |> type_of |> element_type |> element_type |> Llvm.pointer_type)(get_unique_name()) builder
               | _ -> v
@@ -266,28 +278,35 @@ and build_expr sym_table builder ?(nulltype = typ_to_llvmtype (TypP TypV)) expr 
         | Post -> oldval
     )
 
+(* Declare local variable (No initialisation )*)
 and build_local_decl sym_table builder (typ, id) =
   let vartyp = typ_to_llvmtype typ in
   let llvar = Llvm.build_alloca vartyp id builder in
   sym_table |> add_entry id llvar >. ()
 
+(* Build assignment *)
 and build_assign sym_table builder (acc, expr) =
   let lvalue = build_access sym_table builder ~load:false acc in
   let rvalue = build_expr sym_table builder ~nulltype:(Llvm.type_of lvalue) expr in
   Llvm.build_store rvalue lvalue builder >. rvalue
 
+(* Build access. The parameter load determines if the result should be the address or the value *)
 and build_access sym_table builder ?(load = false) acc =
   let v = match (@!) acc with
     | AccVar id -> let var = sym_table |> lookup id in var
     | AccDeref expr -> let addr = build_expr sym_table builder expr in addr
     | AccIndex (arr, ind) -> (
-      let arr_addr = build_access sym_table builder ~load:false arr in
+      let arr_addr = build_access sym_table builder ~load:false arr in (* Address of the array *)
       let ind_val = build_expr sym_table builder ~nulltype:(typ_to_llvmtype TypI) ind in
-      let addr = (
+      let addr = ( (* Address of the value *)
         match arr_addr |> type_of |> element_type |> classify_type with
-          | Llvm.TypeKind.Array -> Llvm.build_in_bounds_gep arr_addr [|Llvm.const_int (Llvm.i32_type ctx) 0; ind_val|] (get_unique_name()) builder
-          | Llvm.TypeKind.Pointer -> let data_addr = Llvm.build_load arr_addr (get_unique_name()) builder in
+          | Llvm.TypeKind.Array -> ( (* Regular arrays *)
+            Llvm.build_in_bounds_gep arr_addr [|Llvm.const_int (Llvm.i32_type ctx) 0; ind_val|] (get_unique_name()) builder
+          )
+          | Llvm.TypeKind.Pointer -> ( (* Pointers to array data. Used in function parameters *)
+            let data_addr = Llvm.build_load arr_addr (get_unique_name()) builder in
             Llvm.build_in_bounds_gep data_addr [|ind_val|] (get_unique_name()) builder
+          )
           | _ -> failwith "Indexing invalid value"
       ) in addr
     ) in
@@ -375,13 +394,15 @@ let to_llvm_module program =
       let sym_table = begin_block (empty_table ()) in
 
       (* Declare external library functions *)
-      (* Could be done with include, but it's left here to make tests work without needing to include interfaces *)
+      (* Could be done with #include, but it's left here to make tests work without needing to include interfaces *)
       add_external_function_to_module mcmodule sym_table {Ast.fname = "print"; Ast.typ = TypV; Ast.formals = [(TypI, "n")]};
       add_external_function_to_module mcmodule sym_table {Ast.fname ="getint"; Ast.typ = TypI; Ast.formals = []};
 
+      (* Add all topdecls to global scope *)
       topdecls |> List.iter
       (add_topdecl_to_module mcmodule sym_table);
 
+      (* Generate code for all the functions *)
       topdecls |>
       List.filter_map (fun td -> match (@!) td with | Fundef fd -> Some fd | _ -> None) |>
       List.iter (build_function sym_table);

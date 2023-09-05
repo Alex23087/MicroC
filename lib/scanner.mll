@@ -3,7 +3,8 @@
 
     (* Auxiliary definitions *)
     exception Lexing_error of Location.lexeme_pos * string
-
+    
+    (* Buffer used to parse string literals *)
     let string_buffer = Buffer.create 256
 
     let keyword_table = Hashtbl.create 12
@@ -24,6 +25,7 @@
             ("declare", EXTERN);
         ]
 
+    (* Transform an escape sequence into the escaped character *)
     let unescape ch lexbuf = match ch with
         | '0'   ->  char_of_int 0x00
         | '\''  ->  '\''
@@ -39,37 +41,42 @@
 
 (* Scanner specification *)
 
-(* Buffer used to parse string literals *)
-
+(* Useful patterns *)
 let alpha = ['a'-'z' 'A'-'Z']
 let digit = ['0'-'9']
 let alphanumeric = alpha | digit
 let hex = digit | ['a'-'f' 'A'-'F']
+(* Escaped sequence, including leading backslash *)
 let escape = '\\' ['0' '\'' 'b' 'f' 't' '\\' 'r' 'n']
-
+(* Filenames allowed for includes. Not a complete set
+of characters allowed in files, but a sufficient one *)
 let filename = (alphanumeric | ['.' '/' '-' '_'])*
 let identifier = (alpha | '_') (alphanumeric | '_')*
 let integer = digit+ | ("0x" hex+)
 let float = ((digit* '.' digit+) ('f')?) | (integer 'f') 
 let boolean = "true" | "false"
 
+(* Unused *)
 let operator = ['&' '+' '-' '*' '/' '%' '=' '<' '>' '!'] | "==" | "!=" | "<=" | ">=" | "&&" | "||"
-
+(* Unused *)
 let other = ['(' ')' '{' '}' '[' ']' '&' ';']
 
 let newline = ['\n' '\r'] | "\r\n"
 let whitespace = [' ' '\t']
 
 rule next_token = parse
-| '"'       {Buffer.clear string_buffer; string_literal lexbuf;
-                let s = Buffer.contents string_buffer in STRING s}
+| '"'       {
+    Buffer.clear string_buffer;
+    string_literal lexbuf;
+    STRING (Buffer.contents string_buffer)
+}
 | "/*"      {block_comment lexbuf}
 | "//"      {single_line_comment lexbuf}
 
 | "true"        {BOOLEAN (true)}
 | "false"       {BOOLEAN (false)}
 
-| "#include" (" ")? '<' (filename as file) '>'    {INCLUDE(file)}
+| "#" ("include" | "import") (whitespace)* '<' (whitespace)* (filename as file) (whitespace)* '>'    {INCLUDE(file)}
 
 | identifier as ident
     { try
@@ -82,7 +89,7 @@ rule next_token = parse
             Float.of_string s
         else Float.of_string flot
 )}
-| integer as intg    {INTEGER (int_of_string intg)} (* TODO: Range checks? *)
+| integer as intg    {INTEGER (int_of_string intg)}
 | "'" ((_ | escape) as chara) "'"
     {
         CHARACTER (
@@ -128,14 +135,15 @@ rule next_token = parse
 | whitespace    {next_token lexbuf}
 | newline       {Lexing.new_line lexbuf; next_token lexbuf}
 
+| eof         {EOF}
 | _ as c        {
     raise (Lexing_error (Location.to_lexeme_position lexbuf, Printf.sprintf "Unrecognised character: \'%c\'" c))
 }
-| eof         {EOF}
 
 and single_line_comment = parse
-    | newline  {Lexing.new_line lexbuf; next_token lexbuf}               (* Go back to main scanner *)
-    | _     {single_line_comment lexbuf}  (* Ignore comment *)
+    | newline   {Lexing.new_line lexbuf; next_token lexbuf}               (* Go back to main scanner *)
+    | eof       {EOF}
+    | _         {single_line_comment lexbuf}  (* Ignore comment *)
 
 and block_comment = parse
     | "*/"      {next_token lexbuf}               (* Go back to main scanner *)

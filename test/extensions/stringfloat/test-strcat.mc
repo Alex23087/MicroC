@@ -6,7 +6,7 @@ void main(){
     char str3[13];
     str1 = "Hello";
     str2 = "World!";
-    strzero(str3, 14);
+    strzero(str3, 13);
     strcat(str3, str1, " ");
     strcat(str3, str3, str2);
 

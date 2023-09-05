@@ -32,3 +32,14 @@ TESTS:
     
     fail-nomain.mc
         Now succeeds because to allow separate compilation the main check has been relaxed
+
+
+
+        https://stackoverflow.com/questions/45362323/ieee-64-and-32-bit-float-validation-in-ocaml
+
+mem2reg optimization
+array to pointer conversion for function calls
+
+global variables are initialised to default value (Llvm null value), local ones are not
+
+add_nsw and in_bounds_gep because of C semantics

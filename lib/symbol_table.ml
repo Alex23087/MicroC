@@ -76,30 +76,5 @@ let print_entries (table: microc_type symbol_table) =
     | None                -> ()
     | Some (x, xs)        -> Format.print_string "{\n"; Format.print_break 0 0; Format.open_box 4; print_block x; print_entries_rec (indent + 1) xs;Format.close_box (); Format.print_string "}\n"; Format.print_break 0 0;
   in print_entries_rec 0 sqn
-  (*TODO: Printing and indentation are reversed, because the recursion is done from the top, which is the inner scope, fix*)
-
-(* let print_entries (table: microc_type symbol_table) =
-  let sqn = Stack.to_seq table
-  in let print_block (blk: microc_type symbol_block) =
-    Hashtbl.iter (fun id a -> Format.print_string id; Format.print_string (show_microc_type a); Format.print_break 0 0) blk;
-  in let rec print_entries_rec sqn = match Seq.uncons sqn with
-    | None                -> 0
-    | Some (x, xs)        -> Format.open_box 0; let ind = (print_entries_rec xs) + 1 in print_block x; Format.close_box (); ind
-  in print_entries_rec sqn >. ()
-
-let print_entries2 (table: microc_type symbol_table) =
-  let sqn = Stack.to_seq table
-  in let print_block (blk: microc_type symbol_block) =
-    Hashtbl.iter (fun id a -> Format.print_string id; Format.print_string (show_microc_type a); Format.print_break 0 0) blk;
-  in  *)
 
 let append_block (table: 'a symbol_table) (block: 'a symbol_block): 'a symbol_table = Stack.push block table; table
-(* let append_table (table: 'a symbol_table) (block: 'a symbol_table): 'a symbol_table = (table |> Stack.to_seq |> Seq.append) (block |> Stack.to_seq) |> Stack.of_seq *)
-
-(* let reverse_stack stack =
-  let rec rev_stack_aux s r = match Stack.pop_opt s with
-    | Some a -> Stack.push a r; rev_stack_aux s r
-    | None -> ()
-  in let reversed = Stack.create()
-  in rev_stack_aux stack reversed;
-  reversed *)
